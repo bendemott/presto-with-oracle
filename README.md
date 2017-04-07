@@ -1,85 +1,47 @@
-# Presto [![Build Status](https://travis-ci.org/prestodb/presto.svg?branch=master)](https://travis-ci.org/prestodb/presto)
+# Presto [![release](https://img.shields.io/badge/release-sc--0.157-blue.svg)](https://travis-ci.org/prestodb/presto) [![license](https://img.shields.io/hexpm/l/plug.svg)](https://github.com/gh351135612/presto/blob/sc-0.157/LICENSE)
+* [简介](#简介)
+* [特点](#特点)
+* [环境](#环境)
+* [编译](#编译)
+* [部署](#部署)
 
-Presto is a distributed SQL query engine for big data.
+<h2 id="简介">简介</h2>
 
-See the [User Manual](https://prestodb.io/docs/current/) for deployment instructions and end user documentation.
+Presto 是一个分布式的SQL 查询引擎，它支持跨数据源的查询操作，但是因为版权以及适用性，不会满足大家所有的需求，如不支持的Oracle 的接入、自动类型转换等一些附加功能。该分支会根据实际情况，对官方版本进行二次开发，读者可以根据实现思路开发出满足自己需求的版本。
 
-## Requirements
+<h2 id="特点">特点</h2>
 
-* Mac OS X or Linux
-* Java 8 Update 60 or higher (8u60+), 64-bit
+* 接入Oracle 数据源（支持查询，创建，插入等操作）
+
+<h2 id="环境">环境</h2>
+
+* Mac OS X or Linux（不支持Windows 下编译）
+* Java 8 Update 92 or higher (8u92+), 64-bit
 * Maven 3.3.9+ (for building)
 * Python 2.4+ (for running with the launcher script)
 
-## Building Presto
+<h2 id="编译">编译</h2>
 
-Presto is a standard Maven project. Simply run the following command from the project root directory:
+不论是用来部署还是用来开发，都必须进行编译，因为有些代码是通过Maven 插件生成的。因为Oracle 的JDBC 驱动在公共库中已经无法查找，需要用户自行安装。
+* 下载Oracle 的JDBC驱动
+我插件中使用的版本为11.2.0.4.0-atlassian-hosted，用户可以自行从网上下载，也可以从我的CSDN中[下载](http://download.csdn.net/detail/u010215256/9831385)。
+* 安装Oracle JDBC 驱动到本地Maven
+```
+mvn install:install-file -DgroupId=com.oracle  -DartifactId=ojdbc6 -Dversion=x.x -Dpackaging=jar -Dfile=ojdbc6-11.2.0.4.0-atlassian-hosted.jar
+```
+* 在Presto 根目录下执行Maven 命令
+```
+mvn clean install -DskipTests=true
+```
+我这里编译时跳过了测试，因为测试会花费很多时间。如果你的网络访问国外的网络比较慢可以考虑配置国内的Maven 源仓。
 
-    mvn clean install
+<h2 id='部署'>部署</h2>
 
-On the first build, Maven will download all the dependencies from the internet and cache them in the local repository (`~/.m2/repository`), which can take a considerable amount of time. Subsequent builds will be faster.
+Presto 提供了两种部署文件，一种是tar 包，一种是rpm，两者任选其一。
 
-Presto has a comprehensive set of unit tests that can take several minutes to run. You can disable the tests when building:
 
-    mvn clean install -DskipTests
 
-## Running Presto in your IDE
 
-### Overview
 
-After building Presto for the first time, you can load the project into your IDE and run the server. We recommend using [IntelliJ IDEA](http://www.jetbrains.com/idea/). Because Presto is a standard Maven project, you can import it into your IDE using the root `pom.xml` file. In IntelliJ, choose Open Project from the Quick Start box or choose Open from the File menu and select the root `pom.xml` file.
 
-After opening the project in IntelliJ, double check that the Java SDK is properly configured for the project:
 
-* Open the File menu and select Project Structure
-* In the SDKs section, ensure that a 1.8 JDK is selected (create one if none exist)
-* In the Project section, ensure the Project language level is set to 8.0 as Presto makes use of several Java 8 language features
-
-Presto comes with sample configuration that should work out-of-the-box for development. Use the following options to create a run configuration:
-
-* Main Class: `com.facebook.presto.server.PrestoServer`
-* VM Options: `-ea -Xmx2G -Dconfig=etc/config.properties -Dlog.levels-file=etc/log.properties`
-* Working directory: `$MODULE_DIR$`
-* Use classpath of module: `presto-main`
-
-The working directory should be the `presto-main` subdirectory. In IntelliJ, using `$MODULE_DIR$` accomplishes this automatically.
-
-Additionally, the Hive plugin must be configured with location of your Hive metastore Thrift service. Add the following to the list of VM options, replacing `localhost:9083` with the correct host and port (or use the below value if you do not have a Hive metastore):
-
-    -Dhive.metastore.uri=thrift://localhost:9083
-
-### Using SOCKS for Hive or HDFS
-
-If your Hive metastore or HDFS cluster is not directly accessible to your local machine, you can use SSH port forwarding to access it. Setup a dynamic SOCKS proxy with SSH listening on local port 1080:
-
-    ssh -v -N -D 1080 server
-
-Then add the following to the list of VM options:
-
-    -Dhive.metastore.thrift.client.socks-proxy=localhost:1080
-
-### Running the CLI
-
-Start the CLI to connect to the server and run SQL queries:
-
-    presto-cli/target/presto-cli-*-executable.jar
-
-Run a query to see the nodes in the cluster:
-
-    SELECT * FROM system.runtime.nodes;
-
-In the sample configuration, the Hive connector is mounted in the `hive` catalog, so you can run the following queries to show the tables in the Hive database `default`:
-
-    SHOW TABLES FROM hive.default;
-
-## Developers
-
-We recommend you use IntelliJ as your IDE. The code style template for the project can be found in the [codestyle](https://github.com/airlift/codestyle) repository along with our general programming and Java guidelines. In addition to those you should also adhere to the following:
-
-* Alphabetize sections in the documentation source files (both in table of contents files and other regular documentation files). In general, alphabetize methods/variables/sections if such ordering already exists in the surrounding code.
-* When appropriate, use the Java 8 stream API. However, note that the stream implementation does not perform well so avoid using it in inner loops or otherwise performance sensitive sections.
-* Categorize errors when throwing exceptions. For example, PrestoException takes an error code as an argument, `PrestoException(HIVE_TOO_MANY_OPEN_PARTITIONS)`. This categorization lets you generate reports so you can monitor the frequency of various failures.
-* Ensure that all files have the appropriate license header; you can generate the license by running `mvn license:format`.
-* Consider using String formatting (printf style formatting using the Java `Formatter` class): `format("Session property %s is invalid: %s", name, value)` (note that `format()` should always be statically imported). Sometimes, if you only need to append something, consider using the `+` operator.
-* Avoid using the ternary operator except for trivial expressions.
-* Use an assertion from Airlift's `Assertions` class if there is one that covers your case rather than writing the assertion by hand. Over time we may move over to more fluent assertions like AssertJ.
