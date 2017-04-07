@@ -301,6 +301,7 @@ public class BaseJdbcClient
             String catalog = connection.getCatalog();
 
             String temporaryName = "tmp_presto_" + UUID.randomUUID().toString().replace("-", "");
+            temporaryName = temporaryName.substring(0, 29);
             StringBuilder sql = new StringBuilder()
                     .append("CREATE TABLE ")
                     .append(quoted(catalog, schema, temporaryName))

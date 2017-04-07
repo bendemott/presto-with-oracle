@@ -49,7 +49,7 @@ public class OracleClient
     public OracleClient(JdbcConnectorId connectorId, BaseJdbcConfig config, OracleConfig oracleConfig)
             throws SQLException
     {
-        super(connectorId, config, "`", new OracleDriver());
+        super(connectorId, config, "", new OracleDriver());
     }
 
     @Override
@@ -180,67 +180,6 @@ public class OracleClient
             tableName = tableName.toLowerCase();
         }
         return new SchemaTableName(tableSchema, tableName);
-    }
-
-    @Override
-    public JdbcOutputTableHandle beginCreateTable(ConnectorTableMetadata tableMetadata) {
-        SchemaTableName schemaTableName = tableMetadata.getTable();
-        String schema = schemaTableName.getSchemaName();
-        String table = schemaTableName.getTableName();
-
-        if (!getSchemaNames().contains(schema)) {
-            throw new PrestoException(NOT_FOUND, "Schema not found: " + schema);
-        }
-
-        try (Connection connection = driver.connect(connectionUrl, connectionProperties)) {
-            boolean uppercase = connection.getMetaData().storesUpperCaseIdentifiers();
-            if (uppercase) {
-                schema = schema.toUpperCase(ENGLISH);
-                table = table.toUpperCase(ENGLISH);
-            }
-            String catalog = connection.getCatalog();
-            //modify the rule of table name , beceuse the length of oracle table name is between 0 and 30
-            String temporaryName = "tmp_presto_" + UUID.randomUUID().toString().replace("-", "");
-            temporaryName = temporaryName.substring(0,29);
-            StringBuilder sql = new StringBuilder()
-                    .append("CREATE TABLE ")
-                    .append(quoted(catalog, schema, temporaryName))
-                    .append(" (");
-            ImmutableList.Builder<String> columnNames = ImmutableList.builder();
-            ImmutableList.Builder<Type> columnTypes = ImmutableList.builder();
-            ImmutableList.Builder<String> columnList = ImmutableList.builder();
-            for (ColumnMetadata column : tableMetadata.getColumns()) {
-                String columnName = column.getName();
-                if (uppercase) {
-                    columnName = columnName.toUpperCase(ENGLISH);
-                }
-                columnNames.add(columnName);
-                columnTypes.add(column.getType());
-                columnList.add(new StringBuilder()
-                        .append(quoted(columnName))
-                        .append(" ")
-                        .append(toSqlType(column.getType()))
-                        .toString());
-            }
-            Joiner.on(", ").appendTo(sql, columnList.build());
-            sql.append(")");
-
-            execute(connection, sql.toString());
-
-            return new JdbcOutputTableHandle(
-                    connectorId,
-                    catalog,
-                    schema,
-                    table,
-                    columnNames.build(),
-                    columnTypes.build(),
-                    temporaryName,
-                    connectionUrl,
-                    fromProperties(connectionProperties));
-        }
-        catch (SQLException e) {
-            throw new PrestoException(JDBC_ERROR, e);
-        }
     }
 
     @Override
