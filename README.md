@@ -12,8 +12,10 @@ Presto 是一个分布式的SQL 查询引擎，它支持跨数据源的查询操
 
 <h2 id="特点">特点</h2>
 
-* 接入Oracle 数据源（支持查询，创建，插入等操作）
+* 接入Oracle 数据源（支持查询，创建，插入等操作）-[blog](http://www.jianshu.com/p/948c41d50a83)
+
 ![presto-oracle preview](https://github.com/gh351135612/presto/blob/sc-0.157/presto-oracle/pc-preview.gif)
+
 <h2 id="环境">环境</h2>
 
 * Mac OS X or Linux（不支持Windows 下编译）
