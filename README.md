@@ -4,6 +4,7 @@
 * [环境](#环境)
 * [编译](#编译)
 * [部署](#部署)
+* [调试](#调试)
 
 <h2 id="简介">简介</h2>
 
@@ -37,7 +38,29 @@ mvn clean install -DskipTests=true
 
 <h2 id='部署'>部署</h2>
 
-Presto 提供了两种部署文件，一种是tar 包，一种是rpm，两者任选其一。
+Presto 提供了两种部署文件，一种是tar 包，一种是rpm，两者任选其一。tar 部署教程可参考此[教程](http://www.jianshu.com/p/46dcd1a7f47f)，rpm 部署可以参考官方[说明](https://github.com/gh351135612/presto/blob/sc-0.157/presto-server-rpm/README.md)。
+* 添加Oracle 的catalog
+```
+connector.name=oracle
+connection-url=jdbc:oracle:thin:@192.168.236.1:1521/orcl
+connection-user=hadoop
+connection-password=hadoop
+```
+
+<h2 id='调试'>调试</h2>
+
+如需观察Presto 是如何运行的，可以进行断点调试。这里推荐使用[IntelliJIDEA](https://www.jetbrains.com/idea/) 导入项目，我们在run configuration 中设置如下参数就可以了,PrestoServer 是Presto 后台服务的启动入口。
+
+#### 设置IntelliJIDEA的run configuration
+
+* Main Class: com.facebook.presto.server.PrestoServer
+* VM Options: -ea -XX:+UseG1GC -XX:G1HeapRegionSize=32M -XX:+UseGCOverheadLimit -XX:+ExplicitGCInvokesConcurrent -Xmx2G -Dconfig=etc/config.properties -Dlog.levels-file=etc/log.properties
+* Working directory: $MODULE_DIR$
+* Use classpath of module: presto-main
+
+#### 修改oracle.properties
+
+调试环境下，catalog 的配置文件夹在presto/presto-main/etc/catalog 路径中，修改成目标Oracle 的配置信息。
 
 
 
