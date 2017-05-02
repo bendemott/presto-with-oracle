@@ -1,4 +1,4 @@
-# Presto [![release](https://img.shields.io/badge/release-sc--0.157-blue.svg)](https://travis-ci.org/prestodb/presto) [![license](https://img.shields.io/hexpm/l/plug.svg)](https://github.com/gh351135612/presto/blob/sc-0.157/LICENSE)
+# Presto [![license](https://img.shields.io/hexpm/l/plug.svg)](https://github.com/gh351135612/presto/blob/sc-0.157/LICENSE)
 * [简介](#简介)
 * [特点](#特点)
 * [环境](#环境)
