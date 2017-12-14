@@ -16,14 +16,16 @@ package com.facebook.presto.tests.datatype;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.VarcharType;
 
+import java.math.BigDecimal;
 import java.util.Optional;
 import java.util.function.Function;
 
 import static com.facebook.presto.spi.type.CharType.createCharType;
+import static com.facebook.presto.spi.type.DecimalType.createDecimalType;
 import static com.facebook.presto.spi.type.VarcharType.createUnboundedVarcharType;
 import static com.google.common.base.Strings.padEnd;
+import static java.lang.String.format;
 import static java.util.Optional.empty;
-import static java.util.Optional.of;
 
 public class DataType<T>
 {
@@ -39,7 +41,7 @@ public class DataType<T>
 
     public static DataType<String> varcharDataType(int size, String properties)
     {
-        return varcharDataType(of(size), properties);
+        return varcharDataType(Optional.of(size), properties);
     }
 
     public static DataType<String> varcharDataType()
@@ -74,6 +76,16 @@ public class DataType<T>
     public static DataType<String> charDataType(String insertType, int length)
     {
         return dataType(insertType, createCharType(length), DataType::quote, input -> padEnd(input, length, ' '));
+    }
+
+    public static DataType<BigDecimal> decimalType(int precision, int scale)
+    {
+        String databaseType = format("decimal(%s, %s)", precision, scale);
+        return dataType(
+                databaseType,
+                createDecimalType(precision, scale),
+                bigDecimal -> format("CAST('%s' AS %s)", bigDecimal, databaseType),
+                bigDecimal -> bigDecimal);
     }
 
     private static String quote(String value)

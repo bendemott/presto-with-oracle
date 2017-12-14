@@ -50,13 +50,22 @@ public interface ResourceGroup
      */
     void setCpuQuotaGenerationMillisPerSecond(long rate);
 
-    int getMaxRunningQueries();
+    int getSoftConcurrencyLimit();
+
+    /**
+     * Number of concurrently running queries after which new queries will only run if
+     * all peer resource groups below their soft limits are ineligible or if all
+     * eligible peers are above soft limits.
+     */
+    void setSoftConcurrencyLimit(int softConcurrencyLimit);
+
+    int getHardConcurrencyLimit();
 
     /**
      * Maximum number of concurrently running queries, after which
      * new queries will queue instead of starting.
      */
-    void setMaxRunningQueries(int maxRunningQueries);
+    void setHardConcurrencyLimit(int hardConcurrencyLimit);
 
     int getMaxQueuedQueries();
 
@@ -86,4 +95,12 @@ public interface ResourceGroup
      * Whether to export statistics about this group and allow configuration via JMX.
      */
     void setJmxExport(boolean export);
+
+    Duration getQueuedTimeLimit();
+
+    void setQueuedTimeLimit(Duration queuedTimeLimit);
+
+    Duration getRunningTimeLimit();
+
+    void setRunningTimeLimit(Duration runningTimeLimit);
 }

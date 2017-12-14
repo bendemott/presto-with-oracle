@@ -21,13 +21,16 @@ import com.facebook.presto.spi.function.SqlType;
 import com.facebook.presto.spi.type.StandardTypes;
 import com.google.common.hash.Hashing;
 import com.google.common.io.BaseEncoding;
+import com.google.common.primitives.Ints;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
 import io.airlift.slice.XxHash64;
 
 import java.util.Base64;
+import java.util.zip.CRC32;
 
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
+import static io.airlift.slice.Slices.EMPTY_SLICE;
 
 public final class VarbinaryFunctions
 {
@@ -157,6 +160,26 @@ public final class VarbinaryFunctions
         return Long.reverseBytes(slice.getLong(0));
     }
 
+    @Description("encode value as a big endian varbinary according to IEEE 754 single-precision floating-point format")
+    @ScalarFunction("to_ieee754_32")
+    @SqlType(StandardTypes.VARBINARY)
+    public static Slice toIEEE754Binary32(@SqlType(StandardTypes.REAL) long value)
+    {
+        Slice slice = Slices.allocate(Float.BYTES);
+        slice.setInt(0, Integer.reverseBytes((int) value));
+        return slice;
+    }
+
+    @Description("encode value as a big endian varbinary according to IEEE 754 double-precision floating-point format")
+    @ScalarFunction("to_ieee754_64")
+    @SqlType(StandardTypes.VARBINARY)
+    public static Slice toIEEE754Binary64(@SqlType(StandardTypes.DOUBLE) double value)
+    {
+        Slice slice = Slices.allocate(Double.BYTES);
+        slice.setLong(0, Long.reverseBytes(Double.doubleToLongBits(value)));
+        return slice;
+    }
+
     @Description("compute md5 hash")
     @ScalarFunction
     @SqlType(StandardTypes.VARBINARY)
@@ -219,5 +242,64 @@ public final class VarbinaryFunctions
     public static Slice fromHexVarbinary(@SqlType(StandardTypes.VARBINARY) Slice slice)
     {
         return fromHexVarchar(slice);
+    }
+
+    @Description("compute CRC-32")
+    @ScalarFunction
+    @SqlType(StandardTypes.BIGINT)
+    public static long crc32(@SqlType(StandardTypes.VARBINARY) Slice slice)
+    {
+        CRC32 crc32 = new CRC32();
+        crc32.update(slice.toByteBuffer());
+        return crc32.getValue();
+    }
+
+    @Description("suffix starting at given index")
+    @ScalarFunction
+    @SqlType(StandardTypes.VARBINARY)
+    public static Slice substr(@SqlType(StandardTypes.VARBINARY) Slice slice, @SqlType(StandardTypes.BIGINT) long start)
+    {
+        return substr(slice, start, slice.length() - start + 1);
+    }
+
+    @Description("substring of given length starting at an index")
+    @ScalarFunction
+    @SqlType(StandardTypes.VARBINARY)
+    public static Slice substr(@SqlType(StandardTypes.VARBINARY) Slice slice, @SqlType(StandardTypes.BIGINT) long start, @SqlType(StandardTypes.BIGINT) long length)
+    {
+        if (start == 0 || length <= 0 || slice.length() == 0) {
+            return EMPTY_SLICE;
+        }
+
+        int startByte = Ints.saturatedCast(start);
+        int byteLength = Ints.saturatedCast(length);
+
+        if (startByte > 0) {
+            int indexStart = startByte - 1; // index starts with 1.
+            if (indexStart >= slice.length()) {
+                return EMPTY_SLICE;
+            }
+            int indexEnd = indexStart + byteLength;
+            if (indexEnd > slice.length()) {
+                indexEnd = slice.length();
+            }
+            return slice.slice(indexStart, indexEnd - indexStart);
+        }
+
+        // negative start is relative to end of string
+        startByte += slice.length();
+
+        // before beginning of string
+        if (startByte < 0) {
+            return EMPTY_SLICE;
+        }
+
+        int indexStart = startByte;
+        int indexEnd = indexStart + byteLength;
+        if (indexEnd > slice.length()) {
+            indexEnd = slice.length();
+        }
+
+        return slice.slice(indexStart, indexEnd - indexStart);
     }
 }

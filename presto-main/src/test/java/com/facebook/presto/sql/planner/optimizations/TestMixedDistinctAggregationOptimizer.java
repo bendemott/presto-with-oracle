@@ -132,8 +132,7 @@ public class TestMixedDistinctAggregationOptimizer
                         aggregation(aggregationsSecond,
                                 project(
                                         aggregation(aggregationsFirst,
-                                                anyTree(values(ImmutableMap.of()))
-                                        )))));
+                                                anyTree(values(ImmutableMap.of())))))));
     }
 
     public void assertUnitPlan(String sql, PlanMatchPattern pattern)
@@ -146,7 +145,7 @@ public class TestMixedDistinctAggregationOptimizer
 
         queryRunner.inTransaction(transactionSession -> {
             Plan actualPlan = queryRunner.createPlan(transactionSession, sql, optimizers);
-            PlanAssert.assertPlan(transactionSession, queryRunner.getMetadata(), actualPlan, pattern);
+            PlanAssert.assertPlan(transactionSession, queryRunner.getMetadata(), queryRunner.getCostCalculator(), actualPlan, pattern);
             return null;
         });
     }

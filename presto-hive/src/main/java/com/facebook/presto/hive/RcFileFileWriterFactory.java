@@ -19,10 +19,10 @@ import com.facebook.presto.rcfile.RcFileDataSource;
 import com.facebook.presto.rcfile.RcFileEncoding;
 import com.facebook.presto.rcfile.binary.BinaryRcFileEncoding;
 import com.facebook.presto.spi.ConnectorSession;
+import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
 import com.google.common.base.Splitter;
-import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableMap;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -43,6 +43,8 @@ import java.util.Properties;
 import java.util.concurrent.Callable;
 import java.util.function.Supplier;
 
+import static com.facebook.presto.hive.HiveErrorCode.HIVE_WRITER_OPEN_ERROR;
+import static com.facebook.presto.hive.HiveErrorCode.HIVE_WRITE_VALIDATION_FAILED;
 import static com.facebook.presto.hive.HiveType.toHiveTypes;
 import static com.facebook.presto.hive.rcfile.RcFilePageSourceFactory.createTextVectorEncoding;
 import static java.util.Objects.requireNonNull;
@@ -57,27 +59,31 @@ public class RcFileFileWriterFactory
     private final HdfsEnvironment hdfsEnvironment;
     private final TypeManager typeManager;
     private final NodeVersion nodeVersion;
+    private final FileFormatDataSourceStats stats;
 
     @Inject
     public RcFileFileWriterFactory(
             HdfsEnvironment hdfsEnvironment,
             TypeManager typeManager,
             NodeVersion nodeVersion,
-            HiveClientConfig hiveClientConfig)
+            HiveClientConfig hiveClientConfig,
+            FileFormatDataSourceStats stats)
     {
-        this(hdfsEnvironment, typeManager, nodeVersion, requireNonNull(hiveClientConfig, "hiveClientConfig is null").getDateTimeZone());
+        this(hdfsEnvironment, typeManager, nodeVersion, requireNonNull(hiveClientConfig, "hiveClientConfig is null").getDateTimeZone(), stats);
     }
 
     public RcFileFileWriterFactory(
             HdfsEnvironment hdfsEnvironment,
             TypeManager typeManager,
             NodeVersion nodeVersion,
-            DateTimeZone hiveStorageTimeZone)
+            DateTimeZone hiveStorageTimeZone,
+            FileFormatDataSourceStats stats)
     {
         this.hdfsEnvironment = requireNonNull(hdfsEnvironment, "hdfsEnvironment is null");
         this.typeManager = requireNonNull(typeManager, "typeManager is null");
         this.nodeVersion = requireNonNull(nodeVersion, "nodeVersion is null");
         this.hiveStorageTimeZone = requireNonNull(hiveStorageTimeZone, "hiveStorageTimeZone is null");
+        this.stats = requireNonNull(stats, "stats is null");
     }
 
     @Override
@@ -111,7 +117,7 @@ public class RcFileFileWriterFactory
         Optional<String> codecName = Optional.ofNullable(configuration.get(FileOutputFormat.COMPRESS_CODEC));
 
         // existing tables and partitions may have columns in a different order than the writer is providing, so build
-        // and index to rearrange columns in the proper order
+        // an index to rearrange columns in the proper order
         List<String> fileColumnNames = Splitter.on(',').trimResults().omitEmptyStrings().splitToList(schema.getProperty(META_TABLE_COLUMNS, ""));
         List<Type> fileColumnTypes = toHiveTypes(schema.getProperty(META_TABLE_COLUMN_TYPES, "")).stream()
                 .map(hiveType -> hiveType.getType(typeManager))
@@ -132,10 +138,11 @@ public class RcFileFileWriterFactory
                         return new HdfsRcFileDataSource(
                                 path.toString(),
                                 fileSystem.open(path),
-                                fileSystem.getFileStatus(path).getLen());
+                                fileSystem.getFileStatus(path).getLen(),
+                                stats);
                     }
                     catch (IOException e) {
-                        throw Throwables.propagate(e);
+                        throw new PrestoException(HIVE_WRITE_VALIDATION_FAILED, e);
                     }
                 });
             }
@@ -159,7 +166,7 @@ public class RcFileFileWriterFactory
                     validationInputFactory));
         }
         catch (Exception e) {
-            throw Throwables.propagate(e);
+            throw new PrestoException(HIVE_WRITER_OPEN_ERROR, "Error creating RCFile file", e);
         }
     }
 }

@@ -52,6 +52,7 @@ import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertTrue;
 import static org.testng.Assert.fail;
 
+// run single threaded to avoid creating multiple query runners at once
 @Test(singleThreaded = true)
 public class TestMemoryManager
 {
@@ -94,14 +95,14 @@ public class TestMemoryManager
         }
     }
 
-    @Test(timeOut = 240_000, expectedExceptions = ExecutionException.class, expectedExceptionsMessageRegExp = ".*The cluster is out of memory, and your query was killed. Please try again in a few minutes.")
+    @Test(timeOut = 240_000, expectedExceptions = ExecutionException.class, expectedExceptionsMessageRegExp = ".*Query killed because the cluster is out of memory. Please try again in a few minutes.")
     public void testOutOfMemoryKiller()
             throws Exception
     {
         Map<String, String> properties = ImmutableMap.<String, String>builder()
                 .put("task.verbose-stats", "true")
                 .put("query.low-memory-killer.delay", "5s")
-                .put("query.low-memory-killer.enabled", "true")
+                .put("query.low-memory-killer.policy", "total-reservation")
                 .build();
 
         try (DistributedQueryRunner queryRunner = createQueryRunner(TINY_SESSION, properties)) {
@@ -123,6 +124,7 @@ public class TestMemoryManager
             while (!queryDone) {
                 for (QueryInfo info : queryRunner.getCoordinator().getQueryManager().getAllQueryInfo()) {
                     if (info.getState().isDone()) {
+                        assertNotNull(info.getErrorCode());
                         assertEquals(info.getErrorCode().getCode(), CLUSTER_OUT_OF_MEMORY.toErrorCode().getCode());
                         queryDone = true;
                         break;
@@ -292,19 +294,20 @@ public class TestMemoryManager
                 .anyMatch(task -> task.getBlockedReasons().contains(WAITING_FOR_MEMORY));
     }
 
-    @Test(timeOut = 240_000, expectedExceptions = RuntimeException.class, expectedExceptionsMessageRegExp = ".*Query exceeded max memory size of 1kB.*")
+    @Test(timeOut = 60_000, expectedExceptions = RuntimeException.class, expectedExceptionsMessageRegExp = ".*Query exceeded max memory size of 1kB.*")
     public void testQueryMemoryLimit()
             throws Exception
     {
         Map<String, String> properties = ImmutableMap.<String, String>builder()
+                .put("task.max-partial-aggregation-memory", "1B")
                 .put("query.max-memory", "1kB")
                 .build();
         try (QueryRunner queryRunner = createQueryRunner(SESSION, properties)) {
-            queryRunner.execute(SESSION, "SELECT COUNT(*), clerk FROM orders GROUP BY clerk");
+            queryRunner.execute(SESSION, "SELECT COUNT(*), repeat(orderstatus, 1000) FROM orders GROUP BY 2");
         }
     }
 
-    @Test(timeOut = 240_000, expectedExceptions = RuntimeException.class, expectedExceptionsMessageRegExp = "Exceeded CPU limit of .*")
+    @Test(timeOut = 60_000, expectedExceptions = RuntimeException.class, expectedExceptionsMessageRegExp = "Exceeded CPU limit of .*")
     public void testQueryCpuLimit()
             throws Exception
     {
@@ -312,20 +315,20 @@ public class TestMemoryManager
                 .put("query.max-cpu-time", "1ms")
                 .build();
         try (QueryRunner queryRunner = createQueryRunner(SESSION, properties)) {
-            // the following test query is known to run for a long time
-            queryRunner.execute(SESSION, "SELECT COUNT(*), clerk FROM orders GROUP BY clerk");
+            queryRunner.execute(SESSION, "SELECT COUNT(*), repeat(orderstatus, 1000) FROM orders GROUP BY 2");
         }
     }
 
-    @Test(timeOut = 240_000, expectedExceptions = RuntimeException.class, expectedExceptionsMessageRegExp = ".*Query exceeded local memory limit of 1kB.*")
+    @Test(timeOut = 60_000, expectedExceptions = RuntimeException.class, expectedExceptionsMessageRegExp = ".*Query exceeded local memory limit of 1kB.*")
     public void testQueryMemoryPerNodeLimit()
             throws Exception
     {
         Map<String, String> properties = ImmutableMap.<String, String>builder()
+                .put("task.max-partial-aggregation-memory", "1B")
                 .put("query.max-memory-per-node", "1kB")
                 .build();
         try (QueryRunner queryRunner = createQueryRunner(SESSION, properties)) {
-            queryRunner.execute(SESSION, "SELECT COUNT(*), clerk FROM orders GROUP BY clerk");
+            queryRunner.execute(SESSION, "SELECT COUNT(*), repeat(orderstatus, 1000) FROM orders GROUP BY 2");
         }
     }
 

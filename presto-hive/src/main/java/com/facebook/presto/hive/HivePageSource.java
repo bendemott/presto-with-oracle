@@ -27,10 +27,10 @@ import com.facebook.presto.spi.type.DecimalType;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.spi.type.VarcharType;
-import com.google.common.base.Throwables;
 import org.joda.time.DateTimeZone;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.List;
 import java.util.function.Function;
 
@@ -71,7 +71,6 @@ import static com.facebook.presto.spi.type.Varchars.isVarcharType;
 import static io.airlift.slice.Slices.utf8Slice;
 import static java.lang.Float.intBitsToFloat;
 import static java.lang.String.format;
-import static java.lang.String.valueOf;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
 
@@ -173,12 +172,6 @@ public class HivePageSource
     }
 
     @Override
-    public long getTotalBytes()
-    {
-        return delegate.getTotalBytes();
-    }
-
-    @Override
     public long getCompletedBytes()
     {
         return delegate.getCompletedBytes();
@@ -237,7 +230,7 @@ public class HivePageSource
             delegate.close();
         }
         catch (IOException e) {
-            throw Throwables.propagate(e);
+            throw new UncheckedIOException(e);
         }
     }
 
@@ -346,7 +339,7 @@ public class HivePageSource
                     blockBuilder.appendNull();
                     continue;
                 }
-                toType.writeSlice(blockBuilder, utf8Slice(valueOf(fromType.getLong(block, i))));
+                toType.writeSlice(blockBuilder, utf8Slice(String.valueOf(fromType.getLong(block, i))));
             }
             return blockBuilder.build();
         }

@@ -21,11 +21,13 @@ import com.facebook.presto.orc.stream.ByteArrayInputStream;
 import com.facebook.presto.orc.stream.InputStreamSource;
 import com.facebook.presto.orc.stream.InputStreamSources;
 import com.facebook.presto.orc.stream.LongInputStream;
+import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.block.Block;
-import com.facebook.presto.spi.block.SliceArrayBlock;
+import com.facebook.presto.spi.block.VariableWidthBlock;
 import com.facebook.presto.spi.type.Type;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
+import io.airlift.units.DataSize;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
@@ -37,18 +39,21 @@ import java.util.List;
 import static com.facebook.presto.orc.metadata.Stream.StreamKind.DATA;
 import static com.facebook.presto.orc.metadata.Stream.StreamKind.LENGTH;
 import static com.facebook.presto.orc.metadata.Stream.StreamKind.PRESENT;
+import static com.facebook.presto.orc.reader.SliceStreamReader.computeTruncatedLength;
 import static com.facebook.presto.orc.stream.MissingInputStreamSource.missingStreamSource;
-import static com.facebook.presto.spi.type.Chars.isCharType;
-import static com.facebook.presto.spi.type.Chars.trimSpacesAndTruncateToLength;
-import static com.facebook.presto.spi.type.Varchars.isVarcharType;
-import static com.facebook.presto.spi.type.Varchars.truncateToLength;
+import static com.facebook.presto.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static com.google.common.base.MoreObjects.toStringHelper;
+import static com.google.common.base.Verify.verify;
+import static io.airlift.slice.Slices.EMPTY_SLICE;
+import static io.airlift.units.DataSize.Unit.GIGABYTE;
+import static java.lang.Math.toIntExact;
+import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 
 public class SliceDirectStreamReader
         implements StreamReader
 {
-    private static final byte[] EMPTY_BYTE_ARRAY = new byte[0];
+    private static final int ONE_GIGABYTE = toIntExact(new DataSize(1, GIGABYTE).toBytes());
 
     private final StreamDescriptor streamDescriptor;
 
@@ -59,7 +64,6 @@ public class SliceDirectStreamReader
     private InputStreamSource<BooleanInputStream> presentStreamSource = missingStreamSource(BooleanInputStream.class);
     @Nullable
     private BooleanInputStream presentStream;
-    private boolean[] isNullVector = new boolean[0];
 
     @Nonnull
     private InputStreamSource<LongInputStream> lengthStreamSource = missingStreamSource(LongInputStream.class);
@@ -102,27 +106,30 @@ public class SliceDirectStreamReader
             }
             if (readOffset > 0) {
                 if (lengthStream == null) {
-                    throw new OrcCorruptionException("Value is not null but length stream is not present");
+                    throw new OrcCorruptionException(streamDescriptor.getOrcDataSourceId(), "Value is not null but length stream is not present");
                 }
                 long dataSkipSize = lengthStream.sum(readOffset);
                 if (dataSkipSize > 0) {
                     if (dataStream == null) {
-                        throw new OrcCorruptionException("Value is not null but data stream is not present");
+                        throw new OrcCorruptionException(streamDescriptor.getOrcDataSourceId(), "Value is not null but data stream is not present");
                     }
                     dataStream.skip(dataSkipSize);
                 }
             }
         }
 
-        if (isNullVector.length < nextBatchSize) {
-            isNullVector = new boolean[nextBatchSize];
-        }
+        // create new isNullVector and offsetVector for VariableWidthBlock
+        boolean[] isNullVector = new boolean[nextBatchSize];
+        int[] offsetVector = new int[nextBatchSize + 1];
+
+        // lengthVector is reused across calls
         if (lengthVector.length < nextBatchSize) {
             lengthVector = new int[nextBatchSize];
         }
+
         if (presentStream == null) {
             if (lengthStream == null) {
-                throw new OrcCorruptionException("Value is not null but length stream is not present");
+                throw new OrcCorruptionException(streamDescriptor.getOrcDataSourceId(), "Value is not null but length stream is not present");
             }
             Arrays.fill(isNullVector, false);
             lengthStream.nextIntVector(nextBatchSize, lengthVector);
@@ -131,49 +138,58 @@ public class SliceDirectStreamReader
             int nullValues = presentStream.getUnsetBits(nextBatchSize, isNullVector);
             if (nullValues != nextBatchSize) {
                 if (lengthStream == null) {
-                    throw new OrcCorruptionException("Value is not null but length stream is not present");
+                    throw new OrcCorruptionException(streamDescriptor.getOrcDataSourceId(), "Value is not null but length stream is not present");
                 }
                 lengthStream.nextIntVector(nextBatchSize, lengthVector, isNullVector);
             }
         }
 
-        int totalLength = 0;
+        long totalLength = 0;
         for (int i = 0; i < nextBatchSize; i++) {
             if (!isNullVector[i]) {
                 totalLength += lengthVector[i];
             }
         }
 
-        byte[] data = EMPTY_BYTE_ARRAY;
-        if (totalLength > 0) {
-            if (dataStream == null) {
-                throw new OrcCorruptionException("Value is not null but data stream is not present");
-            }
-            data = dataStream.next(totalLength);
-        }
-
-        Slice[] sliceVector = new Slice[nextBatchSize];
-
-        int offset = 0;
-        for (int i = 0; i < nextBatchSize; i++) {
-            if (!isNullVector[i]) {
-                int length = lengthVector[i];
-                Slice value = Slices.wrappedBuffer(data, offset, length);
-                if (isVarcharType(type)) {
-                    value = truncateToLength(value, type);
-                }
-                if (isCharType(type)) {
-                    value = trimSpacesAndTruncateToLength(value, type);
-                }
-                sliceVector[i] = value;
-                offset += length;
-            }
-        }
-
+        int currentBatchSize = nextBatchSize;
         readOffset = 0;
         nextBatchSize = 0;
+        if (totalLength == 0) {
+            return new VariableWidthBlock(currentBatchSize, EMPTY_SLICE, offsetVector, isNullVector);
+        }
+        if (totalLength > ONE_GIGABYTE) {
+            throw new PrestoException(GENERIC_INTERNAL_ERROR,
+                    format("Values in column \"%s\" are too large to process for Presto. %s column values are larger than 1GB [%s]", streamDescriptor.getFieldName(), nextBatchSize, streamDescriptor.getOrcDataSourceId()));
+        }
+        if (dataStream == null) {
+            throw new OrcCorruptionException(streamDescriptor.getOrcDataSourceId(), "Value is not null but data stream is not present");
+        }
 
-        return new SliceArrayBlock(sliceVector.length, sliceVector);
+        // allocate enough space to read
+        byte[] data = new byte[toIntExact(totalLength)];
+        Slice slice = Slices.wrappedBuffer(data);
+
+        // truncate string and update offsets
+        offsetVector[0] = 0;
+        for (int i = 0; i < currentBatchSize; i++) {
+            if (isNullVector[i]) {
+                offsetVector[i + 1] = offsetVector[i];
+                continue;
+            }
+            int offset = offsetVector[i];
+            int length = lengthVector[i];
+
+            // read data without truncation
+            dataStream.next(data, offset, offset + length);
+
+            // adjust offsets with truncated length
+            int truncatedLength = computeTruncatedLength(slice, offset, length, type);
+            verify(truncatedLength >= 0);
+            offsetVector[i + 1] = offsetVector[i] + truncatedLength;
+        }
+
+        // this can lead to over-retention but unlikely to happen given truncation rarely happens
+        return new VariableWidthBlock(currentBatchSize, slice, offsetVector, isNullVector);
     }
 
     private void openRowGroup()
@@ -197,8 +213,6 @@ public class SliceDirectStreamReader
         readOffset = 0;
         nextBatchSize = 0;
 
-        Arrays.fill(isNullVector, false);
-
         presentStream = null;
         lengthStream = null;
         dataStream = null;
@@ -216,8 +230,6 @@ public class SliceDirectStreamReader
 
         readOffset = 0;
         nextBatchSize = 0;
-
-        Arrays.fill(isNullVector, false);
 
         presentStream = null;
         lengthStream = null;

@@ -21,6 +21,8 @@ import com.facebook.presto.metadata.SqlScalarFunction;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
+import com.facebook.presto.sql.gen.lambda.BinaryFunctionInterface;
+import com.facebook.presto.sql.gen.lambda.UnaryFunctionInterface;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import com.google.common.primitives.Primitives;
@@ -28,6 +30,10 @@ import com.google.common.primitives.Primitives;
 import java.lang.invoke.MethodHandle;
 
 import static com.facebook.presto.metadata.Signature.typeVariable;
+import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentProperty.functionTypeArgumentProperty;
+import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
+import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
+import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention.USE_BOXED_TYPE;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.spi.type.TypeUtils.readNativeValue;
 import static com.facebook.presto.util.Reflection.methodHandle;
@@ -37,7 +43,7 @@ public final class ArrayReduceFunction
 {
     public static final ArrayReduceFunction ARRAY_REDUCE_FUNCTION = new ArrayReduceFunction();
 
-    private static final MethodHandle METHOD_HANDLE = methodHandle(ArrayReduceFunction.class, "reduce", Type.class, Block.class, Object.class, MethodHandle.class, MethodHandle.class);
+    private static final MethodHandle METHOD_HANDLE = methodHandle(ArrayReduceFunction.class, "reduce", Type.class, Block.class, Object.class, BinaryFunctionInterface.class, UnaryFunctionInterface.class);
 
     private ArrayReduceFunction()
     {
@@ -78,7 +84,11 @@ public final class ArrayReduceFunction
         MethodHandle methodHandle = METHOD_HANDLE.bindTo(inputType);
         return new ScalarFunctionImplementation(
                 true,
-                ImmutableList.of(false, true, false, false),
+                ImmutableList.of(
+                        valueTypeArgumentProperty(RETURN_NULL_ON_NULL),
+                        valueTypeArgumentProperty(USE_BOXED_TYPE),
+                        functionTypeArgumentProperty(BinaryFunctionInterface.class),
+                        functionTypeArgumentProperty(UnaryFunctionInterface.class)),
                 methodHandle.asType(
                         methodHandle.type()
                                 .changeParameterType(1, Primitives.wrap(intermediateType.getJavaType()))
@@ -90,22 +100,22 @@ public final class ArrayReduceFunction
             Type inputType,
             Block block,
             Object initialIntermediateValue,
-            MethodHandle inputFunction,
-            MethodHandle outputFunction)
+            BinaryFunctionInterface inputFunction,
+            UnaryFunctionInterface outputFunction)
     {
         int positionCount = block.getPositionCount();
         Object intermediateValue = initialIntermediateValue;
         for (int position = 0; position < positionCount; position++) {
             Object input = readNativeValue(inputType, block, position);
             try {
-                intermediateValue = inputFunction.invoke(intermediateValue, input);
+                intermediateValue = inputFunction.apply(intermediateValue, input);
             }
             catch (Throwable throwable) {
                 throw Throwables.propagate(throwable);
             }
         }
         try {
-            return outputFunction.invoke(intermediateValue);
+            return outputFunction.apply(intermediateValue);
         }
         catch (Throwable throwable) {
             throw Throwables.propagate(throwable);

@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.hive;
 
+import com.facebook.presto.hive.s3.S3FileSystemType;
 import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableList;
 import com.google.common.net.HostAndPort;
@@ -22,6 +23,7 @@ import io.airlift.configuration.DefunctConfig;
 import io.airlift.configuration.LegacyConfig;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
+import io.airlift.units.MinDataSize;
 import io.airlift.units.MinDuration;
 import org.joda.time.DateTimeZone;
 
@@ -37,8 +39,7 @@ import static io.airlift.units.DataSize.Unit.MEGABYTE;
 @DefunctConfig({
         "hive.file-system-cache-ttl",
         "hive.max-global-split-iterator-threads",
-        "hive.optimized-reader.enabled"
-})
+        "hive.optimized-reader.enabled"})
 public class HiveClientConfig
 {
     private static final Splitter SPLITTER = Splitter.on(',').trimResults().omitEmptyStrings();
@@ -48,10 +49,12 @@ public class HiveClientConfig
     private DataSize maxSplitSize = new DataSize(64, MEGABYTE);
     private int maxPartitionsPerScan = 100_000;
     private int maxOutstandingSplits = 1_000;
+    private DataSize maxOutstandingSplitsSize = new DataSize(256, MEGABYTE);
     private int maxSplitIteratorThreads = 1_000;
     private int minPartitionBatchSize = 10;
     private int maxPartitionBatchSize = 100;
     private int maxInitialSplits = 200;
+    private int splitLoaderConcurrency = 4;
     private DataSize maxInitialSplitSize;
     private int domainCompactionThreshold = 100;
     private boolean forceLocalScheduling;
@@ -76,6 +79,8 @@ public class HiveClientConfig
     private boolean verifyChecksum = true;
     private String domainSocketPath;
 
+    private S3FileSystemType s3FileSystemType = S3FileSystemType.PRESTO;
+
     private HiveStorageFormat hiveStorageFormat = HiveStorageFormat.RCBINARY;
     private HiveCompressionCodec hiveCompressionCodec = HiveCompressionCodec.GZIP;
     private boolean respectTableFormat = true;
@@ -93,22 +98,20 @@ public class HiveClientConfig
 
     private boolean useOrcColumnNames;
     private boolean orcBloomFiltersEnabled;
+    private double orcDefaultBloomFilterFpp = 0.05;
     private DataSize orcMaxMergeDistance = new DataSize(1, MEGABYTE);
     private DataSize orcMaxBufferSize = new DataSize(8, MEGABYTE);
     private DataSize orcStreamBufferSize = new DataSize(8, MEGABYTE);
+    private DataSize orcMaxReadBlockSize = new DataSize(16, MEGABYTE);
+    private boolean orcLazyReadSmallRanges = true;
+    private boolean orcOptimizedWriterEnabled;
 
-    private boolean rcfileOptimizedReaderEnabled = true;
-    private boolean rcfileOptimizedWriterEnabled;
+    private boolean rcfileOptimizedWriterEnabled = true;
+    private boolean rcfileWriterValidate;
 
     private HiveMetastoreAuthenticationType hiveMetastoreAuthenticationType = HiveMetastoreAuthenticationType.NONE;
-    private String hiveMetastoreServicePrincipal;
-    private String hiveMetastoreClientPrincipal;
-    private String hiveMetastoreClientKeytab;
-
     private HdfsAuthenticationType hdfsAuthenticationType = HdfsAuthenticationType.NONE;
     private boolean hdfsImpersonationEnabled;
-    private String hdfsPrestoPrincipal;
-    private String hdfsPrestoKeytab;
 
     private boolean skipDeletionForAlter;
 
@@ -118,6 +121,7 @@ public class HiveClientConfig
     private int fileSystemMaxCacheSize = 1000;
 
     private boolean writesToNonManagedTablesEnabled;
+    private boolean tableStatisticsEnabled = true;
 
     public int getMaxInitialSplits()
     {
@@ -143,6 +147,19 @@ public class HiveClientConfig
     public HiveClientConfig setMaxInitialSplitSize(DataSize maxInitialSplitSize)
     {
         this.maxInitialSplitSize = maxInitialSplitSize;
+        return this;
+    }
+
+    @Min(1)
+    public int getSplitLoaderConcurrency()
+    {
+        return splitLoaderConcurrency;
+    }
+
+    @Config("hive.split-loader-concurrency")
+    public HiveClientConfig setSplitLoaderConcurrency(int splitLoaderConcurrency)
+    {
+        this.splitLoaderConcurrency = splitLoaderConcurrency;
         return this;
     }
 
@@ -249,9 +266,24 @@ public class HiveClientConfig
     }
 
     @Config("hive.max-outstanding-splits")
+    @ConfigDescription("Target number of buffered splits for each table scan in a query, before the scheduler tries to pause itself")
     public HiveClientConfig setMaxOutstandingSplits(int maxOutstandingSplits)
     {
         this.maxOutstandingSplits = maxOutstandingSplits;
+        return this;
+    }
+
+    @MinDataSize("1MB")
+    public DataSize getMaxOutstandingSplitsSize()
+    {
+        return maxOutstandingSplitsSize;
+    }
+
+    @Config("hive.max-outstanding-splits-size")
+    @ConfigDescription("Maximum amount of memory allowed for split buffering for each table scan in a query, before the query is failed")
+    public HiveClientConfig setMaxOutstandingSplitsSize(DataSize maxOutstandingSplits)
+    {
+        this.maxOutstandingSplitsSize = maxOutstandingSplits;
         return this;
     }
 
@@ -564,6 +596,19 @@ public class HiveClientConfig
         return this;
     }
 
+    @NotNull
+    public S3FileSystemType getS3FileSystemType()
+    {
+        return s3FileSystemType;
+    }
+
+    @Config("hive.s3-file-system-type")
+    public HiveClientConfig setS3FileSystemType(S3FileSystemType s3FileSystemType)
+    {
+        this.s3FileSystemType = s3FileSystemType;
+        return this;
+    }
+
     public boolean isVerifyChecksum()
     {
         return verifyChecksum;
@@ -656,6 +701,35 @@ public class HiveClientConfig
         return this;
     }
 
+    @NotNull
+    public DataSize getOrcMaxReadBlockSize()
+    {
+        return orcMaxReadBlockSize;
+    }
+
+    @Config("hive.orc.max-read-block-size")
+    public HiveClientConfig setOrcMaxReadBlockSize(DataSize orcMaxReadBlockSize)
+    {
+        this.orcMaxReadBlockSize = orcMaxReadBlockSize;
+        return this;
+    }
+
+    @Deprecated
+    public boolean isOrcLazyReadSmallRanges()
+    {
+        return orcLazyReadSmallRanges;
+    }
+
+    // TODO remove config option once efficacy is proven
+    @Deprecated
+    @Config("hive.orc.lazy-read-small-ranges")
+    @ConfigDescription("ORC read small disk ranges lazily")
+    public HiveClientConfig setOrcLazyReadSmallRanges(boolean orcLazyReadSmallRanges)
+    {
+        this.orcLazyReadSmallRanges = orcLazyReadSmallRanges;
+        return this;
+    }
+
     public boolean isOrcBloomFiltersEnabled()
     {
         return orcBloomFiltersEnabled;
@@ -668,17 +742,30 @@ public class HiveClientConfig
         return this;
     }
 
-    @Deprecated
-    public boolean isRcfileOptimizedReaderEnabled()
+    public double getOrcDefaultBloomFilterFpp()
     {
-        return rcfileOptimizedReaderEnabled;
+        return orcDefaultBloomFilterFpp;
+    }
+
+    @Config("hive.orc.default-bloom-filter-fpp")
+    @ConfigDescription("ORC Bloom filter false positive probability")
+    public HiveClientConfig setOrcDefaultBloomFilterFpp(double orcDefaultBloomFilterFpp)
+    {
+        this.orcDefaultBloomFilterFpp = orcDefaultBloomFilterFpp;
+        return this;
     }
 
     @Deprecated
-    @Config("hive.rcfile-optimized-reader.enabled")
-    public HiveClientConfig setRcfileOptimizedReaderEnabled(boolean rcfileOptimizedReaderEnabled)
+    public boolean isOrcOptimizedWriterEnabled()
     {
-        this.rcfileOptimizedReaderEnabled = rcfileOptimizedReaderEnabled;
+        return orcOptimizedWriterEnabled;
+    }
+
+    @Deprecated
+    @Config("hive.orc.optimized-writer.enabled")
+    public HiveClientConfig setOrcOptimizedWriterEnabled(boolean orcOptimizedWriterEnabled)
+    {
+        this.orcOptimizedWriterEnabled = orcOptimizedWriterEnabled;
         return this;
     }
 
@@ -693,6 +780,19 @@ public class HiveClientConfig
     public HiveClientConfig setRcfileOptimizedWriterEnabled(boolean rcfileOptimizedWriterEnabled)
     {
         this.rcfileOptimizedWriterEnabled = rcfileOptimizedWriterEnabled;
+        return this;
+    }
+
+    public boolean isRcfileWriterValidate()
+    {
+        return rcfileWriterValidate;
+    }
+
+    @Config("hive.rcfile.writer.validate")
+    @ConfigDescription("Validate RCFile after write by re-reading the whole file")
+    public HiveClientConfig setRcfileWriterValidate(boolean rcfileWriterValidate)
+    {
+        this.rcfileWriterValidate = rcfileWriterValidate;
         return this;
     }
 
@@ -727,6 +827,7 @@ public class HiveClientConfig
         KERBEROS
     }
 
+    @NotNull
     public HiveMetastoreAuthenticationType getHiveMetastoreAuthenticationType()
     {
         return hiveMetastoreAuthenticationType;
@@ -740,51 +841,13 @@ public class HiveClientConfig
         return this;
     }
 
-    public String getHiveMetastoreServicePrincipal()
-    {
-        return hiveMetastoreServicePrincipal;
-    }
-
-    @Config("hive.metastore.service.principal")
-    @ConfigDescription("Hive Metastore service principal")
-    public HiveClientConfig setHiveMetastoreServicePrincipal(String hiveMetastoreServicePrincipal)
-    {
-        this.hiveMetastoreServicePrincipal = hiveMetastoreServicePrincipal;
-        return this;
-    }
-
-    public String getHiveMetastoreClientPrincipal()
-    {
-        return hiveMetastoreClientPrincipal;
-    }
-
-    @Config("hive.metastore.client.principal")
-    @ConfigDescription("Hive Metastore client principal")
-    public HiveClientConfig setHiveMetastoreClientPrincipal(String hiveMetastoreClientPrincipal)
-    {
-        this.hiveMetastoreClientPrincipal = hiveMetastoreClientPrincipal;
-        return this;
-    }
-
-    public String getHiveMetastoreClientKeytab()
-    {
-        return hiveMetastoreClientKeytab;
-    }
-
-    @Config("hive.metastore.client.keytab")
-    @ConfigDescription("Hive Metastore client keytab location")
-    public HiveClientConfig setHiveMetastoreClientKeytab(String hiveMetastoreClientKeytab)
-    {
-        this.hiveMetastoreClientKeytab = hiveMetastoreClientKeytab;
-        return this;
-    }
-
     public enum HdfsAuthenticationType
     {
         NONE,
         KERBEROS,
     }
 
+    @NotNull
     public HdfsAuthenticationType getHdfsAuthenticationType()
     {
         return hdfsAuthenticationType;
@@ -808,32 +871,6 @@ public class HiveClientConfig
     public HiveClientConfig setHdfsImpersonationEnabled(boolean hdfsImpersonationEnabled)
     {
         this.hdfsImpersonationEnabled = hdfsImpersonationEnabled;
-        return this;
-    }
-
-    public String getHdfsPrestoPrincipal()
-    {
-        return hdfsPrestoPrincipal;
-    }
-
-    @Config("hive.hdfs.presto.principal")
-    @ConfigDescription("Presto principal used to access HDFS")
-    public HiveClientConfig setHdfsPrestoPrincipal(String hdfsPrestoPrincipal)
-    {
-        this.hdfsPrestoPrincipal = hdfsPrestoPrincipal;
-        return this;
-    }
-
-    public String getHdfsPrestoKeytab()
-    {
-        return hdfsPrestoKeytab;
-    }
-
-    @Config("hive.hdfs.presto.keytab")
-    @ConfigDescription("Presto keytab used to access HDFS")
-    public HiveClientConfig setHdfsPrestoKeytab(String hdfsPrestoKeytab)
-    {
-        this.hdfsPrestoKeytab = hdfsPrestoKeytab;
         return this;
     }
 
@@ -900,5 +937,18 @@ public class HiveClientConfig
     public boolean getWritesToNonManagedTablesEnabled()
     {
         return writesToNonManagedTablesEnabled;
+    }
+
+    @Config("hive.table-statistics-enabled")
+    @ConfigDescription("Enable use of table statistics")
+    public HiveClientConfig setTableStatisticsEnabled(boolean tableStatisticsEnabled)
+    {
+        this.tableStatisticsEnabled = tableStatisticsEnabled;
+        return this;
+    }
+
+    public boolean isTableStatisticsEnabled()
+    {
+        return tableStatisticsEnabled;
     }
 }

@@ -49,6 +49,7 @@ public class StageStats
     private final int totalDrivers;
     private final int queuedDrivers;
     private final int runningDrivers;
+    private final int blockedDrivers;
     private final int completedDrivers;
 
     private final double cumulativeMemory;
@@ -71,6 +72,9 @@ public class StageStats
     private final DataSize bufferedDataSize;
     private final DataSize outputDataSize;
     private final long outputPositions;
+
+    private final DataSize physicalWrittenDataSize;
+
     private final List<OperatorStats> operatorSummaries;
 
     @VisibleForTesting
@@ -86,6 +90,7 @@ public class StageStats
         this.totalDrivers = 0;
         this.queuedDrivers = 0;
         this.runningDrivers = 0;
+        this.blockedDrivers = 0;
         this.completedDrivers = 0;
         this.cumulativeMemory = 0.0;
         this.totalMemoryReservation = null;
@@ -103,6 +108,7 @@ public class StageStats
         this.bufferedDataSize = null;
         this.outputDataSize = null;
         this.outputPositions = 0;
+        this.physicalWrittenDataSize = null;
         this.operatorSummaries = null;
     }
 
@@ -121,6 +127,7 @@ public class StageStats
             @JsonProperty("totalDrivers") int totalDrivers,
             @JsonProperty("queuedDrivers") int queuedDrivers,
             @JsonProperty("runningDrivers") int runningDrivers,
+            @JsonProperty("blockedDrivers") int blockedDrivers,
             @JsonProperty("completedDrivers") int completedDrivers,
 
             @JsonProperty("cumulativeMemory") double cumulativeMemory,
@@ -143,6 +150,9 @@ public class StageStats
             @JsonProperty("bufferedDataSize") DataSize bufferedDataSize,
             @JsonProperty("outputDataSize") DataSize outputDataSize,
             @JsonProperty("outputPositions") long outputPositions,
+
+            @JsonProperty("physicalWrittenDataSize") DataSize physicalWrittenDataSize,
+
             @JsonProperty("operatorSummaries") List<OperatorStats> operatorSummaries)
     {
         this.schedulingComplete = schedulingComplete;
@@ -163,6 +173,8 @@ public class StageStats
         this.queuedDrivers = queuedDrivers;
         checkArgument(runningDrivers >= 0, "runningDrivers is negative");
         this.runningDrivers = runningDrivers;
+        checkArgument(blockedDrivers >= 0, "blockedDrivers is negative");
+        this.blockedDrivers = blockedDrivers;
         checkArgument(completedDrivers >= 0, "completedDrivers is negative");
         this.completedDrivers = completedDrivers;
 
@@ -189,6 +201,9 @@ public class StageStats
         this.outputDataSize = requireNonNull(outputDataSize, "outputDataSize is null");
         checkArgument(outputPositions >= 0, "outputPositions is negative");
         this.outputPositions = outputPositions;
+
+        this.physicalWrittenDataSize = requireNonNull(physicalWrittenDataSize, "writtenDataSize is null");
+
         this.operatorSummaries = ImmutableList.copyOf(requireNonNull(operatorSummaries, "operatorSummaries is null"));
     }
 
@@ -250,6 +265,12 @@ public class StageStats
     public int getRunningDrivers()
     {
         return runningDrivers;
+    }
+
+    @JsonProperty
+    public int getBlockedDrivers()
+    {
+        return blockedDrivers;
     }
 
     @JsonProperty
@@ -352,6 +373,12 @@ public class StageStats
     public long getOutputPositions()
     {
         return outputPositions;
+    }
+
+    @JsonProperty
+    public DataSize getPhysicalWrittenDataSize()
+    {
+        return physicalWrittenDataSize;
     }
 
     @JsonProperty

@@ -14,8 +14,8 @@
 package com.facebook.presto.operator.scalar;
 
 import com.facebook.presto.Session;
-import com.facebook.presto.type.ArrayType;
-import com.facebook.presto.type.RowType;
+import com.facebook.presto.spi.type.ArrayType;
+import com.facebook.presto.spi.type.RowType;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import org.testng.annotations.BeforeClass;
@@ -25,7 +25,6 @@ import java.util.Optional;
 
 import static com.facebook.presto.operator.scalar.ApplyFunction.APPLY_FUNCTION;
 import static com.facebook.presto.operator.scalar.InvokeFunction.INVOKE_FUNCTION;
-import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
@@ -84,6 +83,12 @@ public class TestLambdaExpression
     }
 
     @Test
+    public void testLambdaWithoutArgument()
+    {
+        assertFunction("invoke(() -> 42)", INTEGER, 42);
+    }
+
+    @Test
     public void testSessionDependent()
             throws Exception
     {
@@ -94,15 +99,6 @@ public class TestLambdaExpression
     public void testInstanceFunction()
     {
         assertFunction("apply(ARRAY[2], x -> concat(ARRAY [1], x))", new ArrayType(INTEGER), ImmutableList.of(1, 2));
-    }
-
-    @Test
-    public void testWithTry()
-            throws Exception
-    {
-        assertFunction("TRY(apply(5, x -> x + 1) / 0)", INTEGER, null);
-        assertFunction("TRY(apply(5 + RANDOM(1), x -> x + 1) / 0)", INTEGER, null);
-        assertInvalidFunction("apply(5 + RANDOM(1), x -> x + TRY(1 / 0))", NOT_SUPPORTED);
     }
 
     @Test
@@ -127,18 +123,18 @@ public class TestLambdaExpression
     {
         assertFunction("apply(90, \"$internal$bind\"(9, (x, y) -> x + y))", INTEGER, 99);
         assertFunction("invoke(\"$internal$bind\"(8, x -> x + 1))", INTEGER, 9);
-        assertFunction("apply(900, \"$internal$bind\"(90, \"$internal$bind\"(9, (x, y, z) -> x + y + z)))", INTEGER, 999);
-        assertFunction("invoke(\"$internal$bind\"(90, \"$internal$bind\"(9, (x, y) -> x + y)))", INTEGER, 99);
+        assertFunction("apply(900, \"$internal$bind\"(90, 9, (x, y, z) -> x + y + z))", INTEGER, 999);
+        assertFunction("invoke(\"$internal$bind\"(90, 9, (x, y) -> x + y))", INTEGER, 99);
     }
 
     @Test
     public void testCoercion()
             throws Exception
     {
-        assertFunction("apply(90, x -> x + 9.0)", DOUBLE, 99.0);
+        assertFunction("apply(90, x -> x + 9.0E0)", DOUBLE, 99.0);
 
-        assertFunction("apply(90, \"$internal$bind\"(9.0, (x, y) -> x + y))", DOUBLE, 99.0);
-        assertFunction("invoke(\"$internal$bind\"(8, x -> x + 1.0))", DOUBLE, 9.0);
+        assertFunction("apply(90, \"$internal$bind\"(9.0E0, (x, y) -> x + y))", DOUBLE, 99.0);
+        assertFunction("invoke(\"$internal$bind\"(8, x -> x + 1.0E0))", DOUBLE, 9.0);
     }
 
     @Test
@@ -146,25 +142,25 @@ public class TestLambdaExpression
             throws Exception
     {
         assertFunction("apply(25, x -> x + 1)", INTEGER, 26);
-        assertFunction("apply(25, x -> x + 1.0)", DOUBLE, 26.0);
+        assertFunction("apply(25, x -> x + 1.0E0)", DOUBLE, 26.0);
         assertFunction("apply(25, x -> x = 25)", BOOLEAN, true);
         assertFunction("apply(25, x -> to_base(x, 16))", createVarcharType(64), "19");
         assertFunction("apply(25, x -> ARRAY[x + 1])", new ArrayType(INTEGER), ImmutableList.of(26));
 
-        assertFunction("apply(25.6, x -> CAST(x AS BIGINT))", BIGINT, 26L);
-        assertFunction("apply(25.6, x -> x + 1.0)", DOUBLE, 26.6);
-        assertFunction("apply(25.6, x -> x = 25.6)", BOOLEAN, true);
-        assertFunction("apply(25.6, x -> CAST(x AS VARCHAR))", createUnboundedVarcharType(), "25.6");
-        assertFunction("apply(25.6, x -> MAP(ARRAY[x + 1], ARRAY[true]))", mapType(DOUBLE, BOOLEAN), ImmutableMap.of(26.6, true));
+        assertFunction("apply(25.6E0, x -> CAST(x AS BIGINT))", BIGINT, 26L);
+        assertFunction("apply(25.6E0, x -> x + 1.0E0)", DOUBLE, 26.6);
+        assertFunction("apply(25.6E0, x -> x = 25.6E0)", BOOLEAN, true);
+        assertFunction("apply(25.6E0, x -> CAST(x AS VARCHAR))", createUnboundedVarcharType(), "25.6");
+        assertFunction("apply(25.6E0, x -> MAP(ARRAY[x + 1], ARRAY[true]))", mapType(DOUBLE, BOOLEAN), ImmutableMap.of(26.6, true));
 
         assertFunction("apply(true, x -> if(x, 25, 26))", INTEGER, 25);
-        assertFunction("apply(false, x -> if(x, 25.6, 28.9))", DOUBLE, 28.9);
+        assertFunction("apply(false, x -> if(x, 25.6E0, 28.9E0))", DOUBLE, 28.9);
         assertFunction("apply(true, x -> not x)", BOOLEAN, false);
         assertFunction("apply(false, x -> CAST(x AS VARCHAR))", createUnboundedVarcharType(), "false");
         assertFunction("apply(true, x -> ARRAY[x])", new ArrayType(BOOLEAN), ImmutableList.of(true));
 
         assertFunction("apply('41', x -> from_base(x, 16))", BIGINT, 65L);
-        assertFunction("apply('25.6', x -> CAST(x AS DOUBLE))", DOUBLE, 25.6);
+        assertFunction("apply('25.6E0', x -> CAST(x AS DOUBLE))", DOUBLE, 25.6);
         assertFunction("apply('abc', x -> 'abc' = x)", BOOLEAN, true);
         assertFunction("apply('abc', x -> x || x)", createUnboundedVarcharType(), "abcabc");
         assertFunction(

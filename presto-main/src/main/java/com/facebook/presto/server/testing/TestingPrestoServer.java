@@ -15,6 +15,7 @@ package com.facebook.presto.server.testing;
 
 import com.facebook.presto.connector.ConnectorId;
 import com.facebook.presto.connector.ConnectorManager;
+import com.facebook.presto.cost.CostCalculator;
 import com.facebook.presto.eventlistener.EventListenerManager;
 import com.facebook.presto.execution.QueryManager;
 import com.facebook.presto.execution.TaskManager;
@@ -36,6 +37,7 @@ import com.facebook.presto.spi.Node;
 import com.facebook.presto.spi.Plugin;
 import com.facebook.presto.split.SplitManager;
 import com.facebook.presto.sql.parser.SqlParserOptions;
+import com.facebook.presto.sql.planner.NodePartitioningManager;
 import com.facebook.presto.testing.ProcedureTester;
 import com.facebook.presto.testing.TestingAccessControlManager;
 import com.facebook.presto.testing.TestingEventListenerManager;
@@ -69,6 +71,7 @@ import org.weakref.jmx.guice.MBeanModule;
 import javax.annotation.concurrent.GuardedBy;
 
 import java.io.Closeable;
+import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -81,11 +84,13 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 
-import static com.facebook.presto.server.testing.FileUtils.deleteRecursively;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Strings.nullToEmpty;
+import static com.google.common.io.MoreFiles.deleteRecursively;
+import static com.google.common.io.RecursiveDeleteOption.ALLOW_INSECURE;
 import static io.airlift.discovery.client.ServiceAnnouncement.serviceAnnouncement;
 import static java.lang.Integer.parseInt;
+import static java.nio.file.Files.isDirectory;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
@@ -100,10 +105,12 @@ public class TestingPrestoServer
     private final CatalogManager catalogManager;
     private final TransactionManager transactionManager;
     private final Metadata metadata;
+    private final CostCalculator costCalculator;
     private final TestingAccessControlManager accessControl;
     private final ProcedureTester procedureTester;
     private final Optional<InternalResourceGroupManager> resourceGroupManager;
     private final SplitManager splitManager;
+    private final NodePartitioningManager nodePartitioningManager;
     private final ClusterMemoryManager clusterMemoryManager;
     private final LocalMemoryManager localMemoryManager;
     private final InternalNodeManager nodeManager;
@@ -175,7 +182,6 @@ public class TestingPrestoServer
                 .putAll(properties)
                 .put("coordinator", String.valueOf(coordinator))
                 .put("presto.version", "testversion")
-                .put("http-client.max-threads", "16")
                 .put("task.concurrency", "4")
                 .put("task.max-worker-threads", "4")
                 .put("exchange.client-threads", "4");
@@ -233,6 +239,7 @@ public class TestingPrestoServer
                 .doNotInitializeLogging()
                 .setRequiredConfigurationProperties(serverProperties.build())
                 .setOptionalConfigurationProperties(optionalProperties)
+                .quiet()
                 .initialize();
 
         injector.getInstance(Announcer.class).start();
@@ -249,15 +256,18 @@ public class TestingPrestoServer
         catalogManager = injector.getInstance(CatalogManager.class);
         transactionManager = injector.getInstance(TransactionManager.class);
         metadata = injector.getInstance(Metadata.class);
+        costCalculator = injector.getInstance(CostCalculator.class);
         accessControl = injector.getInstance(TestingAccessControlManager.class);
         procedureTester = injector.getInstance(ProcedureTester.class);
         splitManager = injector.getInstance(SplitManager.class);
         if (coordinator) {
             resourceGroupManager = Optional.of((InternalResourceGroupManager) injector.getInstance(ResourceGroupManager.class));
+            nodePartitioningManager = injector.getInstance(NodePartitioningManager.class);
             clusterMemoryManager = injector.getInstance(ClusterMemoryManager.class);
         }
         else {
             resourceGroupManager = Optional.empty();
+            nodePartitioningManager = null;
             clusterMemoryManager = null;
         }
         localMemoryManager = injector.getInstance(LocalMemoryManager.class);
@@ -275,6 +285,7 @@ public class TestingPrestoServer
 
     @Override
     public void close()
+            throws IOException
     {
         try {
             if (lifeCycleManager != null) {
@@ -285,7 +296,9 @@ public class TestingPrestoServer
             throw Throwables.propagate(e);
         }
         finally {
-            deleteRecursively(baseDataDir);
+            if (isDirectory(baseDataDir)) {
+                deleteRecursively(baseDataDir, ALLOW_INSECURE);
+            }
         }
     }
 
@@ -346,6 +359,11 @@ public class TestingPrestoServer
         return metadata;
     }
 
+    public CostCalculator getCostCalculator()
+    {
+        return costCalculator;
+    }
+
     public TestingAccessControlManager getAccessControl()
     {
         return accessControl;
@@ -364,6 +382,11 @@ public class TestingPrestoServer
     public Optional<InternalResourceGroupManager> getResourceGroupManager()
     {
         return resourceGroupManager;
+    }
+
+    public NodePartitioningManager getNodePartitioningManager()
+    {
+        return nodePartitioningManager;
     }
 
     public LocalMemoryManager getLocalMemoryManager()

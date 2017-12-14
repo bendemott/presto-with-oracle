@@ -13,30 +13,36 @@
  */
 package com.facebook.presto.execution;
 
-import com.facebook.presto.server.SessionSupplier;
+import com.facebook.presto.execution.QueryExecution.QueryOutputInfo;
+import com.facebook.presto.server.SessionContext;
 import com.facebook.presto.spi.QueryId;
 import com.facebook.presto.spi.resourceGroups.ResourceGroupId;
-import io.airlift.units.Duration;
+import com.facebook.presto.sql.planner.Plan;
+import com.google.common.util.concurrent.ListenableFuture;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Consumer;
 
 public interface QueryManager
 {
     List<QueryInfo> getAllQueryInfo();
 
-    Duration waitForStateChange(QueryId queryId, QueryState currentState, Duration maxWait)
-            throws InterruptedException;
+    void addOutputInfoListener(QueryId queryId, Consumer<QueryOutputInfo> listener);
+
+    ListenableFuture<QueryState> getStateChange(QueryId queryId, QueryState currentState);
 
     QueryInfo getQueryInfo(QueryId queryId);
 
     Optional<ResourceGroupId> getQueryResourceGroup(QueryId queryId);
 
+    Plan getQueryPlan(QueryId queryId);
+
     Optional<QueryState> getQueryState(QueryId queryId);
 
     void recordHeartbeat(QueryId queryId);
 
-    QueryInfo createQuery(SessionSupplier sessionSupplier, String query);
+    QueryInfo createQuery(SessionContext sessionContext, String query);
 
     void cancelQuery(QueryId queryId);
 

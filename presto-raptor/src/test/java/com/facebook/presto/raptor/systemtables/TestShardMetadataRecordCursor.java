@@ -18,6 +18,7 @@ import com.facebook.presto.raptor.metadata.ColumnInfo;
 import com.facebook.presto.raptor.metadata.MetadataDao;
 import com.facebook.presto.raptor.metadata.ShardInfo;
 import com.facebook.presto.raptor.metadata.ShardManager;
+import com.facebook.presto.raptor.metadata.TableColumn;
 import com.facebook.presto.spi.ColumnMetadata;
 import com.facebook.presto.spi.RecordCursor;
 import com.facebook.presto.spi.SchemaTableName;
@@ -27,6 +28,7 @@ import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.predicate.ValueSet;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.testing.MaterializedRow;
+import com.facebook.presto.type.TypeRegistry;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -34,7 +36,6 @@ import io.airlift.slice.Slice;
 import org.joda.time.DateTime;
 import org.skife.jdbi.v2.DBI;
 import org.skife.jdbi.v2.Handle;
-import org.skife.jdbi.v2.IDBI;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
@@ -68,12 +69,13 @@ public class TestShardMetadataRecordCursor
 
     private Handle dummyHandle;
     private ConnectorMetadata metadata;
-    private IDBI dbi;
+    private DBI dbi;
 
     @BeforeMethod
     public void setup()
     {
         this.dbi = new DBI("jdbc:h2:mem:test" + System.nanoTime());
+        this.dbi.registerMapper(new TableColumn.Mapper(new TypeRegistry()));
         this.dummyHandle = dbi.open();
         createTablesWithRetry(dbi);
         this.metadata = new RaptorMetadata("raptor", dbi, createShardManager(dbi));
@@ -83,7 +85,8 @@ public class TestShardMetadataRecordCursor
                 .column("orderkey", BIGINT)
                 .column("orderdate", DATE)
                 .property("temporal_column", "orderdate")
-                .build());
+                .build(),
+                false);
     }
 
     @AfterMethod(alwaysRun = true)
@@ -104,9 +107,9 @@ public class TestShardMetadataRecordCursor
         UUID uuid1 = UUID.randomUUID();
         UUID uuid2 = UUID.randomUUID();
         UUID uuid3 = UUID.randomUUID();
-        ShardInfo shardInfo1 = new ShardInfo(uuid1, bucketNumber, ImmutableSet.of("node1"), ImmutableList.of(), 1, 10, 100);
-        ShardInfo shardInfo2 = new ShardInfo(uuid2, bucketNumber, ImmutableSet.of("node2"), ImmutableList.of(), 2, 20, 200);
-        ShardInfo shardInfo3 = new ShardInfo(uuid3, bucketNumber, ImmutableSet.of("node3"), ImmutableList.of(), 3, 30, 300);
+        ShardInfo shardInfo1 = new ShardInfo(uuid1, bucketNumber, ImmutableSet.of("node1"), ImmutableList.of(), 1, 10, 100, 0x1234);
+        ShardInfo shardInfo2 = new ShardInfo(uuid2, bucketNumber, ImmutableSet.of("node2"), ImmutableList.of(), 2, 20, 200, 0xCAFEBABEDEADBEEFL);
+        ShardInfo shardInfo3 = new ShardInfo(uuid3, bucketNumber, ImmutableSet.of("node3"), ImmutableList.of(), 3, 30, 300, 0xFEDCBA0987654321L);
         List<ShardInfo> shards = ImmutableList.of(shardInfo1, shardInfo2, shardInfo3);
 
         long transactionId = shardManager.beginTransaction();
@@ -130,8 +133,8 @@ public class TestShardMetadataRecordCursor
                 ImmutableMap.<Integer, Domain>builder()
                         .put(0, Domain.singleValue(createVarcharType(10), schema))
                         .put(1, Domain.create(ValueSet.ofRanges(lessThanOrEqual(createVarcharType(10), table)), true))
-                        .put(6, Domain.create(ValueSet.ofRanges(lessThanOrEqual(BIGINT, date1.getMillis()), greaterThan(BIGINT, date2.getMillis())), true))
-                        .put(7, Domain.create(ValueSet.ofRanges(lessThanOrEqual(BIGINT, date1.getMillis()), greaterThan(BIGINT, date2.getMillis())), true))
+                        .put(8, Domain.create(ValueSet.ofRanges(lessThanOrEqual(BIGINT, date1.getMillis()), greaterThan(BIGINT, date2.getMillis())), true))
+                        .put(9, Domain.create(ValueSet.ofRanges(lessThanOrEqual(BIGINT, date1.getMillis()), greaterThan(BIGINT, date2.getMillis())), true))
                         .build());
 
         List<MaterializedRow> actual;
@@ -141,9 +144,9 @@ public class TestShardMetadataRecordCursor
         assertEquals(actual.size(), 3);
 
         List<MaterializedRow> expected = ImmutableList.of(
-                new MaterializedRow(DEFAULT_PRECISION, schema, table, utf8Slice(uuid1.toString()), null, 100L, 10L, 1L, null, null),
-                new MaterializedRow(DEFAULT_PRECISION, schema, table, utf8Slice(uuid2.toString()), null, 200L, 20L, 2L, null, null),
-                new MaterializedRow(DEFAULT_PRECISION, schema, table, utf8Slice(uuid3.toString()), null, 300L, 30L, 3L, null, null));
+                new MaterializedRow(DEFAULT_PRECISION, schema, table, utf8Slice(uuid1.toString()), null, 100L, 10L, 1L, utf8Slice("0000000000001234"), null, null, null, null),
+                new MaterializedRow(DEFAULT_PRECISION, schema, table, utf8Slice(uuid2.toString()), null, 200L, 20L, 2L, utf8Slice("cafebabedeadbeef"), null, null, null, null),
+                new MaterializedRow(DEFAULT_PRECISION, schema, table, utf8Slice(uuid3.toString()), null, 300L, 30L, 3L, utf8Slice("fedcba0987654321"), null, null, null, null));
 
         assertEquals(actual, expected);
     }
@@ -155,12 +158,14 @@ public class TestShardMetadataRecordCursor
         // Create "orders" table in a different schema
         metadata.createTable(SESSION, tableMetadataBuilder(new SchemaTableName("other", "orders"))
                 .column("orderkey", BIGINT)
-                .build());
+                .build(),
+                false);
 
         // Create another table that should not be selected
         metadata.createTable(SESSION, tableMetadataBuilder(new SchemaTableName("schema1", "foo"))
                 .column("orderkey", BIGINT)
-                .build());
+                .build(),
+                false);
 
         TupleDomain<Integer> tupleDomain = TupleDomain.withColumnDomains(
                 ImmutableMap.<Integer, Domain>builder()
@@ -182,12 +187,14 @@ public class TestShardMetadataRecordCursor
         // Create "orders" table in a different schema
         metadata.createTable(SESSION, tableMetadataBuilder(new SchemaTableName("test", "orders2"))
                 .column("orderkey", BIGINT)
-                .build());
+                .build(),
+                false);
 
         // Create another table that should not be selected
         metadata.createTable(SESSION, tableMetadataBuilder(new SchemaTableName("schema1", "foo"))
                 .column("orderkey", BIGINT)
-                .build());
+                .build(),
+                false);
 
         TupleDomain<Integer> tupleDomain = TupleDomain.withColumnDomains(
                 ImmutableMap.<Integer, Domain>builder()

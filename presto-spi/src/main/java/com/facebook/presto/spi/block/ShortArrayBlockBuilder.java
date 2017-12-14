@@ -15,21 +15,23 @@ package com.facebook.presto.spi.block;
 
 import org.openjdk.jol.info.ClassLayout;
 
+import javax.annotation.Nullable;
+
 import java.util.Arrays;
-import java.util.List;
+import java.util.function.BiConsumer;
 
 import static com.facebook.presto.spi.block.BlockUtil.calculateBlockResetSize;
+import static com.facebook.presto.spi.block.BlockUtil.checkValidPositionsArray;
 import static com.facebook.presto.spi.block.BlockUtil.checkValidRegion;
-import static com.facebook.presto.spi.block.BlockUtil.intSaturatedCast;
 import static io.airlift.slice.SizeOf.sizeOf;
 import static java.lang.Math.max;
-import static java.util.Objects.requireNonNull;
 
 public class ShortArrayBlockBuilder
         implements BlockBuilder
 {
-    private static final int INSTANCE_SIZE = ClassLayout.parseClass(ShortArrayBlockBuilder.class).instanceSize() + BlockBuilderStatus.INSTANCE_SIZE;
+    private static final int INSTANCE_SIZE = ClassLayout.parseClass(ShortArrayBlockBuilder.class).instanceSize();
 
+    @Nullable
     private BlockBuilderStatus blockBuilderStatus;
     private boolean initialized;
     private int initialEntryCount;
@@ -40,11 +42,11 @@ public class ShortArrayBlockBuilder
     private boolean[] valueIsNull = new boolean[0];
     private short[] values = new short[0];
 
-    private int retainedSizeInBytes;
+    private long retainedSizeInBytes;
 
-    public ShortArrayBlockBuilder(BlockBuilderStatus blockBuilderStatus, int expectedEntries)
+    public ShortArrayBlockBuilder(@Nullable BlockBuilderStatus blockBuilderStatus, int expectedEntries)
     {
-        this.blockBuilderStatus = requireNonNull(blockBuilderStatus, "blockBuilderStatus is null");
+        this.blockBuilderStatus = blockBuilderStatus;
         this.initialEntryCount = max(expectedEntries, 1);
 
         updateDataSize();
@@ -60,7 +62,9 @@ public class ShortArrayBlockBuilder
         values[positionCount] = (short) value;
 
         positionCount++;
-        blockBuilderStatus.addBytes(Byte.BYTES + Short.BYTES);
+        if (blockBuilderStatus != null) {
+            blockBuilderStatus.addBytes(Byte.BYTES + Short.BYTES);
+        }
         return this;
     }
 
@@ -80,7 +84,9 @@ public class ShortArrayBlockBuilder
         valueIsNull[positionCount] = true;
 
         positionCount++;
-        blockBuilderStatus.addBytes(Byte.BYTES + Short.BYTES);
+        if (blockBuilderStatus != null) {
+            blockBuilderStatus.addBytes(Byte.BYTES + Short.BYTES);
+        }
         return this;
     }
 
@@ -114,26 +120,36 @@ public class ShortArrayBlockBuilder
 
     private void updateDataSize()
     {
-        retainedSizeInBytes = intSaturatedCast(INSTANCE_SIZE + sizeOf(valueIsNull) + sizeOf(values));
+        retainedSizeInBytes = INSTANCE_SIZE + sizeOf(valueIsNull) + sizeOf(values);
+        if (blockBuilderStatus != null) {
+            retainedSizeInBytes += BlockBuilderStatus.INSTANCE_SIZE;
+        }
     }
 
-    // Copied from ShortArrayBlock
     @Override
-    public int getSizeInBytes()
+    public long getSizeInBytes()
     {
-        return intSaturatedCast((Short.BYTES + Byte.BYTES) * (long) positionCount);
+        return (Short.BYTES + Byte.BYTES) * (long) positionCount;
     }
 
     @Override
-    public int getRegionSizeInBytes(int position, int length)
+    public long getRegionSizeInBytes(int position, int length)
     {
-        return intSaturatedCast((Short.BYTES + Byte.BYTES) * (long) length);
+        return (Short.BYTES + Byte.BYTES) * (long) length;
     }
 
     @Override
-    public int getRetainedSizeInBytes()
+    public long getRetainedSizeInBytes()
     {
         return retainedSizeInBytes;
+    }
+
+    @Override
+    public void retainedBytesForEachPart(BiConsumer<Object, Long> consumer)
+    {
+        consumer.accept(values, sizeOf(values));
+        consumer.accept(valueIsNull, sizeOf(valueIsNull));
+        consumer.accept(this, (long) INSTANCE_SIZE);
     }
 
     @Override
@@ -177,17 +193,19 @@ public class ShortArrayBlockBuilder
     }
 
     @Override
-    public Block copyPositions(List<Integer> positions)
+    public Block copyPositions(int[] positions, int offset, int length)
     {
-        boolean[] newValueIsNull = new boolean[positions.size()];
-        short[] newValues = new short[positions.size()];
-        for (int i = 0; i < positions.size(); i++) {
-            int position = positions.get(i);
+        checkValidPositionsArray(positions, offset, length);
+
+        boolean[] newValueIsNull = new boolean[length];
+        short[] newValues = new short[length];
+        for (int i = 0; i < length; i++) {
+            int position = positions[offset + i];
             checkReadablePosition(position);
             newValueIsNull[i] = valueIsNull[position];
             newValues[i] = values[position];
         }
-        return new ShortArrayBlock(positions.size(), newValueIsNull, newValues);
+        return new ShortArrayBlock(length, newValueIsNull, newValues);
     }
 
     @Override

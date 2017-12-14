@@ -13,11 +13,19 @@
  */
 package com.facebook.presto.tests;
 
+import com.facebook.presto.execution.QueryInfo;
+import com.facebook.presto.execution.QueryManager;
+import com.facebook.presto.execution.TestingSessionContext;
 import com.facebook.presto.metadata.MetadataManager;
-import com.facebook.presto.testing.QueryRunner;
+import com.facebook.presto.spi.QueryId;
 import org.intellij.lang.annotations.Language;
+import org.testng.annotations.AfterClass;
+import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
+import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
+import static com.facebook.presto.execution.QueryState.FAILED;
+import static com.facebook.presto.execution.QueryState.RUNNING;
 import static com.facebook.presto.tests.tpch.TpchQueryRunner.createQueryRunner;
 import static org.testng.Assert.assertEquals;
 
@@ -30,14 +38,21 @@ import static org.testng.Assert.assertEquals;
 @Test(singleThreaded = true)
 public class TestMetadataManager
 {
-    private final QueryRunner queryRunner;
-    private final MetadataManager metadataManager;
+    private DistributedQueryRunner queryRunner;
+    private MetadataManager metadataManager;
 
-    TestMetadataManager()
+    @BeforeClass
+    public void setUp()
             throws Exception
     {
         queryRunner = createQueryRunner();
         metadataManager = (MetadataManager) queryRunner.getMetadata();
+    }
+
+    @AfterClass(alwaysRun = true)
+    public void tearDown()
+    {
+        queryRunner.close();
     }
 
     @Test
@@ -60,6 +75,32 @@ public class TestMetadataManager
             // query should fail
         }
 
+        assertEquals(metadataManager.getCatalogsByQueryId().size(), 0);
+    }
+
+    @Test
+    public void testMetadataIsClearedAfterQueryCanceled()
+            throws Exception
+    {
+        QueryManager queryManager = queryRunner.getCoordinator().getQueryManager();
+        QueryId queryId = queryManager.createQuery(new TestingSessionContext(TEST_SESSION),
+                "SELECT * FROM lineitem").getQueryId();
+
+        // wait until query starts running
+        while (true) {
+            QueryInfo queryInfo = queryManager.getQueryInfo(queryId);
+            if (queryInfo.getState().isDone()) {
+                assertEquals(queryInfo.getState(), FAILED);
+                throw queryInfo.getFailureInfo().toException();
+            }
+            if (queryInfo.getState() == RUNNING) {
+                break;
+            }
+            Thread.sleep(100);
+        }
+
+        // cancel query
+        queryManager.cancelQuery(queryId);
         assertEquals(metadataManager.getCatalogsByQueryId().size(), 0);
     }
 }

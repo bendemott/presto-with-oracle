@@ -16,6 +16,7 @@ package com.facebook.presto.hive;
 import com.facebook.presto.hive.metastore.CachingHiveMetastore;
 import com.facebook.presto.hive.metastore.ExtendedHiveMetastore;
 import com.facebook.presto.hive.metastore.SemiTransactionalHiveMetastore;
+import com.facebook.presto.hive.statistics.MetastoreHiveStatisticsProvider;
 import com.facebook.presto.spi.type.TypeManager;
 import io.airlift.concurrent.BoundedExecutor;
 import io.airlift.json.JsonCodec;
@@ -32,7 +33,6 @@ public class HiveMetadataFactory
 {
     private static final Logger log = Logger.get(HiveMetadataFactory.class);
 
-    private final String connectorId;
     private final boolean allowCorruptWritesForTesting;
     private final boolean respectTableFormat;
     private final boolean bucketWritingEnabled;
@@ -55,7 +55,6 @@ public class HiveMetadataFactory
     @Inject
     @SuppressWarnings("deprecation")
     public HiveMetadataFactory(
-            HiveConnectorId connectorId,
             HiveClientConfig hiveClientConfig,
             ExtendedHiveMetastore metastore,
             HdfsEnvironment hdfsEnvironment,
@@ -68,7 +67,7 @@ public class HiveMetadataFactory
             TypeTranslator typeTranslator,
             NodeVersion nodeVersion)
     {
-        this(connectorId,
+        this(
                 metastore,
                 hdfsEnvironment,
                 partitionManager,
@@ -91,7 +90,6 @@ public class HiveMetadataFactory
     }
 
     public HiveMetadataFactory(
-            HiveConnectorId connectorId,
             ExtendedHiveMetastore metastore,
             HdfsEnvironment hdfsEnvironment,
             HivePartitionManager partitionManager,
@@ -112,8 +110,6 @@ public class HiveMetadataFactory
             TypeTranslator typeTranslator,
             String prestoVersion)
     {
-        this.connectorId = requireNonNull(connectorId, "connectorId is null").toString();
-
         this.allowCorruptWritesForTesting = allowCorruptWritesForTesting;
         this.respectTableFormat = respectTableFormat;
         this.skipDeletionForAlter = skipDeletionForAlter;
@@ -145,13 +141,14 @@ public class HiveMetadataFactory
 
     public HiveMetadata create()
     {
+        SemiTransactionalHiveMetastore metastore = new SemiTransactionalHiveMetastore(
+                hdfsEnvironment,
+                CachingHiveMetastore.memoizeMetastore(this.metastore, perTransactionCacheMaximumSize), // per-transaction cache
+                renameExecution,
+                skipDeletionForAlter);
+
         return new HiveMetadata(
-                connectorId,
-                new SemiTransactionalHiveMetastore(
-                        hdfsEnvironment,
-                        CachingHiveMetastore.memoizeMetastore(metastore, perTransactionCacheMaximumSize), // per-transaction cache
-                        renameExecution,
-                        skipDeletionForAlter),
+                metastore,
                 hdfsEnvironment,
                 partitionManager,
                 timeZone,
@@ -165,6 +162,7 @@ public class HiveMetadataFactory
                 tableParameterCodec,
                 partitionUpdateCodec,
                 typeTranslator,
-                prestoVersion);
+                prestoVersion,
+                new MetastoreHiveStatisticsProvider(typeManager, metastore));
     }
 }

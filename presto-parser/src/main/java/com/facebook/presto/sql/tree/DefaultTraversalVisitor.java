@@ -13,7 +13,6 @@
  */
 package com.facebook.presto.sql.tree;
 
-import java.util.Map.Entry;
 import java.util.Set;
 
 public abstract class DefaultTraversalVisitor<R, C>
@@ -170,12 +169,26 @@ public abstract class DefaultTraversalVisitor<R, C>
             process(argument, context);
         }
 
+        if (node.getOrderBy().isPresent()) {
+            process(node.getOrderBy().get(), context);
+        }
+
         if (node.getWindow().isPresent()) {
             process(node.getWindow().get(), context);
         }
 
         if (node.getFilter().isPresent()) {
             process(node.getFilter().get(), context);
+        }
+
+        return null;
+    }
+
+    @Override
+    protected R visitGroupingOperation(GroupingOperation node, C context)
+    {
+        for (Expression columnArgument : node.getGroupingColumns()) {
+            process(columnArgument, context);
         }
 
         return null;
@@ -282,7 +295,9 @@ public abstract class DefaultTraversalVisitor<R, C>
     @Override
     protected R visitBindExpression(BindExpression node, C context)
     {
-        process(node.getValue(), context);
+        for (Expression value : node.getValues()) {
+            process(value, context);
+        }
         process(node.getFunction(), context);
 
         return null;
@@ -500,7 +515,18 @@ public abstract class DefaultTraversalVisitor<R, C>
     protected R visitCreateTableAsSelect(CreateTableAsSelect node, C context)
     {
         process(node.getQuery(), context);
-        node.getProperties().values().forEach(expression -> process(expression, context));
+        for (Property property : node.getProperties()) {
+            process(property, context);
+        }
+
+        return null;
+    }
+
+    @Override
+    protected R visitProperty(Property node, C context)
+    {
+        process(node.getName(), context);
+        process(node.getValue(), context);
 
         return null;
     }
@@ -535,8 +561,8 @@ public abstract class DefaultTraversalVisitor<R, C>
         for (TableElement tableElement : node.getElements()) {
             process(tableElement, context);
         }
-        for (Entry<String, Expression> entry : node.getProperties().entrySet()) {
-            process(entry.getValue(), context);
+        for (Property property : node.getProperties()) {
+            process(property, context);
         }
 
         return null;
@@ -593,5 +619,13 @@ public abstract class DefaultTraversalVisitor<R, C>
         process(node.getSubquery(), context);
 
         return null;
+    }
+
+    @Override
+    protected R visitLateral(Lateral node, C context)
+    {
+        process(node.getQuery(), context);
+
+        return super.visitLateral(node, context);
     }
 }

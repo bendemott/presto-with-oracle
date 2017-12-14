@@ -5,7 +5,7 @@
     <parent>
         <groupId>com.facebook.presto</groupId>
         <artifactId>presto-root</artifactId>
-        <version>0.175-SNAPSHOT</version>
+        <version>0.191-SNAPSHOT</version>
     </parent>
 
     <artifactId>presto-hive</artifactId>
@@ -39,7 +39,7 @@
 
         <dependency>
             <groupId>com.facebook.presto.hadoop</groupId>
-            <artifactId>hadoop-cdh4</artifactId>
+            <artifactId>hadoop-apache2</artifactId>
             <scope>provided</scope>
         </dependency>
 
@@ -110,12 +110,18 @@
 
         <dependency>
             <groupId>com.google.code.findbugs</groupId>
-            <artifactId>annotations</artifactId>
+            <artifactId>jsr305</artifactId>
+            <optional>true</optional>
         </dependency>
 
         <dependency>
             <groupId>it.unimi.dsi</groupId>
             <artifactId>fastutil</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.openjdk.jol</groupId>
+            <artifactId>jol-core</artifactId>
         </dependency>
 
         <dependency>
@@ -175,6 +181,13 @@
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
+        </dependency>
+
+        <!-- used by tests but also needed transitively -->
+        <dependency>
+            <groupId>io.airlift</groupId>
+            <artifactId>log-manager</artifactId>
+            <scope>runtime</scope>
         </dependency>
 
         <!-- Presto SPI -->
@@ -238,12 +251,6 @@
         <dependency>
             <groupId>io.airlift</groupId>
             <artifactId>testing</artifactId>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>io.airlift</groupId>
-            <artifactId>log-manager</artifactId>
             <scope>test</scope>
         </dependency>
 

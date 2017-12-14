@@ -23,12 +23,16 @@ import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
+import com.facebook.presto.sql.gen.lambda.BinaryFunctionInterface;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 
 import java.lang.invoke.MethodHandle;
 
 import static com.facebook.presto.metadata.Signature.typeVariable;
+import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentProperty.functionTypeArgumentProperty;
+import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
+import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.spi.type.TypeUtils.readNativeValue;
@@ -41,7 +45,7 @@ public final class ZipWithFunction
 {
     public static final ZipWithFunction ZIP_WITH_FUNCTION = new ZipWithFunction();
 
-    private static final MethodHandle METHOD_HANDLE = methodHandle(ZipWithFunction.class, "zipWith", Type.class, Type.class, Type.class, Block.class, Block.class, MethodHandle.class);
+    private static final MethodHandle METHOD_HANDLE = methodHandle(ZipWithFunction.class, "zipWith", Type.class, Type.class, Type.class, Block.class, Block.class, BinaryFunctionInterface.class);
 
     private ZipWithFunction()
     {
@@ -81,12 +85,15 @@ public final class ZipWithFunction
         Type outputElementType = boundVariables.getTypeVariable("R");
         return new ScalarFunctionImplementation(
                 false,
-                ImmutableList.of(false, false, false),
+                ImmutableList.of(
+                        valueTypeArgumentProperty(RETURN_NULL_ON_NULL),
+                        valueTypeArgumentProperty(RETURN_NULL_ON_NULL),
+                        functionTypeArgumentProperty(BinaryFunctionInterface.class)),
                 METHOD_HANDLE.bindTo(leftElementType).bindTo(rightElementType).bindTo(outputElementType),
                 isDeterministic());
     }
 
-    public static Block zipWith(Type leftElementType, Type rightElementType, Type outputElementType, Block leftBlock, Block rightBlock, MethodHandle function)
+    public static Block zipWith(Type leftElementType, Type rightElementType, Type outputElementType, Block leftBlock, Block rightBlock, BinaryFunctionInterface function)
     {
         checkCondition(leftBlock.getPositionCount() == rightBlock.getPositionCount(), INVALID_FUNCTION_ARGUMENT, "Arrays must have the same length");
         BlockBuilder resultBuilder = outputElementType.createBlockBuilder(new BlockBuilderStatus(), leftBlock.getPositionCount());
@@ -95,7 +102,7 @@ public final class ZipWithFunction
             Object right = readNativeValue(rightElementType, rightBlock, position);
             Object output;
             try {
-                output = function.invoke(left, right);
+                output = function.apply(left, right);
             }
             catch (Throwable throwable) {
                 throw Throwables.propagate(throwable);

@@ -13,18 +13,14 @@
  */
 package com.facebook.presto.type;
 
-import com.facebook.presto.Session;
-import com.facebook.presto.operator.scalar.FunctionAssertions;
+import com.facebook.presto.operator.scalar.AbstractTestFunctions;
 import com.facebook.presto.spi.type.SqlTime;
 import com.facebook.presto.spi.type.SqlTimeWithTimeZone;
 import com.facebook.presto.spi.type.SqlTimestamp;
 import com.facebook.presto.spi.type.SqlTimestampWithTimeZone;
 import com.facebook.presto.spi.type.TimeZoneKey;
-import com.facebook.presto.spi.type.Type;
 import org.joda.time.DateTime;
 import org.joda.time.DateTimeZone;
-import org.testng.annotations.AfterClass;
-import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
@@ -35,35 +31,20 @@ import static com.facebook.presto.spi.type.TimestampType.TIMESTAMP;
 import static com.facebook.presto.spi.type.TimestampWithTimeZoneType.TIMESTAMP_WITH_TIME_ZONE;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.testing.TestingSession.testSessionBuilder;
+import static com.facebook.presto.type.IntervalDayTimeType.INTERVAL_DAY_TIME;
 import static com.facebook.presto.util.DateTimeZoneIndex.getDateTimeZone;
-import static io.airlift.testing.Closeables.closeAllRuntimeException;
 
 public class TestTime
+        extends AbstractTestFunctions
 {
     private static final TimeZoneKey TIME_ZONE_KEY = getTimeZoneKey("Europe/Berlin");
     private static final DateTimeZone DATE_TIME_ZONE = getDateTimeZone(TIME_ZONE_KEY);
 
-    private FunctionAssertions functionAssertions;
-
-    @BeforeClass
-    public void setUp()
+    public TestTime()
     {
-        Session session = testSessionBuilder()
+        super(testSessionBuilder()
                 .setTimeZoneKey(TIME_ZONE_KEY)
-                .build();
-        functionAssertions = new FunctionAssertions(session);
-    }
-
-    @AfterClass(alwaysRun = true)
-    public void tearDown()
-    {
-        closeAllRuntimeException(functionAssertions);
-        functionAssertions = null;
-    }
-
-    private void assertFunction(String projection, Type expectedType, Object expected)
-    {
-        functionAssertions.assertFunction(projection, expectedType, expected);
+                .build());
     }
 
     @Test
@@ -73,6 +54,15 @@ public class TestTime
         assertFunction("TIME '03:04:05.321'", TIME, new SqlTime(new DateTime(1970, 1, 1, 3, 4, 5, 321, DATE_TIME_ZONE).getMillis(), TIME_ZONE_KEY));
         assertFunction("TIME '03:04:05'", TIME, new SqlTime(new DateTime(1970, 1, 1, 3, 4, 5, 0, DATE_TIME_ZONE).getMillis(), TIME_ZONE_KEY));
         assertFunction("TIME '03:04'", TIME, new SqlTime(new DateTime(1970, 1, 1, 3, 4, 0, 0, DATE_TIME_ZONE).getMillis(), TIME_ZONE_KEY));
+    }
+
+    @Test
+    public void testSubstract()
+            throws Exception
+    {
+        functionAssertions.assertFunctionString("TIME '14:15:16.432' - TIME '03:04:05.321'", INTERVAL_DAY_TIME, "0 11:11:11.111");
+
+        functionAssertions.assertFunctionString("TIME '03:04:05.321' - TIME '14:15:16.432'", INTERVAL_DAY_TIME, "-0 11:11:11.111");
     }
 
     @Test

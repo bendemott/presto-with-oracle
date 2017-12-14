@@ -16,6 +16,7 @@ package com.facebook.presto.type;
 import com.facebook.presto.RowPagesBuilder;
 import com.facebook.presto.Session;
 import com.facebook.presto.metadata.MetadataManager;
+import com.facebook.presto.operator.DriverYieldSignal;
 import com.facebook.presto.operator.project.PageProcessor;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.type.BigintType;
@@ -24,13 +25,14 @@ import com.facebook.presto.spi.type.DoubleType;
 import com.facebook.presto.spi.type.SqlDecimal;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.gen.ExpressionCompiler;
+import com.facebook.presto.sql.gen.PageFunctionCompiler;
 import com.facebook.presto.sql.parser.SqlParser;
 import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.SymbolToInputRewriter;
 import com.facebook.presto.sql.relational.RowExpression;
 import com.facebook.presto.sql.relational.SqlToRowExpressionTranslator;
 import com.facebook.presto.sql.tree.Expression;
-import com.facebook.presto.util.maps.IdentityLinkedHashMap;
+import com.facebook.presto.sql.tree.NodeRef;
 import com.google.common.collect.ImmutableList;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.Fork;
@@ -532,7 +534,7 @@ public class BenchmarkDecimalOperators
 
     private Object execute(BaseState state)
     {
-        return ImmutableList.copyOf(state.getProcessor().process(SESSION, state.getInputPage()));
+        return ImmutableList.copyOf(state.getProcessor().process(SESSION, new DriverYieldSignal(), state.getInputPage()));
     }
 
     private static class BaseState
@@ -593,7 +595,7 @@ public class BenchmarkDecimalOperators
 
         protected void generateProcessor(String expression)
         {
-            processor = new ExpressionCompiler(metadata).compilePageProcessor(Optional.empty(), ImmutableList.of(rowExpression(expression))).get();
+            processor = new ExpressionCompiler(metadata, new PageFunctionCompiler(metadata, 0)).compilePageProcessor(Optional.empty(), ImmutableList.of(rowExpression(expression))).get();
         }
 
         protected void setDoubleMaxValue(double doubleMaxValue)
@@ -608,7 +610,7 @@ public class BenchmarkDecimalOperators
             Map<Integer, Type> types = sourceLayout.entrySet().stream()
                     .collect(toMap(Map.Entry::getValue, entry -> symbolTypes.get(entry.getKey())));
 
-            IdentityLinkedHashMap<Expression, Type> expressionTypes = getExpressionTypesFromInput(TEST_SESSION, metadata, SQL_PARSER, types, inputReferenceExpression, emptyList());
+            Map<NodeRef<Expression>, Type> expressionTypes = getExpressionTypesFromInput(TEST_SESSION, metadata, SQL_PARSER, types, inputReferenceExpression, emptyList());
             return SqlToRowExpressionTranslator.translate(inputReferenceExpression, SCALAR, expressionTypes, metadata.getFunctionRegistry(), metadata.getTypeManager(), TEST_SESSION, true);
         }
 

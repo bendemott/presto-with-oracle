@@ -14,12 +14,14 @@
 package com.facebook.presto.hive.metastore.file;
 
 import com.facebook.presto.hive.HdfsEnvironment;
+import com.facebook.presto.hive.HdfsEnvironment.HdfsContext;
 import com.facebook.presto.hive.HiveType;
 import com.facebook.presto.hive.SchemaAlreadyExistsException;
 import com.facebook.presto.hive.TableAlreadyExistsException;
 import com.facebook.presto.hive.metastore.Column;
 import com.facebook.presto.hive.metastore.Database;
 import com.facebook.presto.hive.metastore.ExtendedHiveMetastore;
+import com.facebook.presto.hive.metastore.HiveColumnStatistics;
 import com.facebook.presto.hive.metastore.HivePrivilegeInfo;
 import com.facebook.presto.hive.metastore.Partition;
 import com.facebook.presto.hive.metastore.PrincipalPrivileges;
@@ -30,6 +32,7 @@ import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.SchemaNotFoundException;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.TableNotFoundException;
+import com.facebook.presto.spi.security.Identity;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -66,6 +69,7 @@ import static com.facebook.presto.hive.HiveUtil.toPartitionValues;
 import static com.facebook.presto.hive.metastore.Database.DEFAULT_DATABASE_NAME;
 import static com.facebook.presto.hive.metastore.HivePrivilegeInfo.HivePrivilege.OWNERSHIP;
 import static com.facebook.presto.hive.metastore.MetastoreUtil.makePartName;
+import static com.facebook.presto.hive.metastore.MetastoreUtil.verifyCanDropColumn;
 import static com.facebook.presto.hive.metastore.PrincipalType.ROLE;
 import static com.facebook.presto.hive.metastore.PrincipalType.USER;
 import static com.facebook.presto.spi.StandardErrorCode.ALREADY_EXISTS;
@@ -73,6 +77,7 @@ import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
 import static com.google.common.base.Preconditions.checkArgument;
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toList;
+import static org.apache.hadoop.hive.common.FileUtils.unescapePathName;
 import static org.apache.hadoop.hive.metastore.TableType.EXTERNAL_TABLE;
 import static org.apache.hadoop.hive.metastore.TableType.MANAGED_TABLE;
 import static org.apache.hadoop.hive.metastore.TableType.VIRTUAL_VIEW;
@@ -87,7 +92,7 @@ public class FileHiveMetastore
 
     private final HdfsEnvironment hdfsEnvironment;
     private final Path catalogDirectory;
-    private final String metastoreUser;
+    private final HdfsContext hdfsContext;
     private final FileSystem metadataFileSystem;
 
     private final JsonCodec<DatabaseMetadata> databaseCodec = JsonCodec.jsonCodec(DatabaseMetadata.class);
@@ -105,9 +110,9 @@ public class FileHiveMetastore
     {
         this.hdfsEnvironment = requireNonNull(hdfsEnvironment, "hdfsEnvironment is null");
         this.catalogDirectory = new Path(requireNonNull(catalogDirectory, "baseDirectory is null"));
-        this.metastoreUser = requireNonNull(metastoreUser, "metastoreUser is null");
+        this.hdfsContext = new HdfsContext(new Identity(metastoreUser, Optional.empty()));
         try {
-            metadataFileSystem = hdfsEnvironment.getFileSystem(metastoreUser, this.catalogDirectory);
+            metadataFileSystem = hdfsEnvironment.getFileSystem(hdfsContext, this.catalogDirectory);
         }
         catch (IOException e) {
             throw new PrestoException(HIVE_METASTORE_ERROR, e);
@@ -212,7 +217,7 @@ public class FileHiveMetastore
         else if (table.getTableType().equals(EXTERNAL_TABLE.name())) {
             try {
                 Path externalLocation = new Path(table.getStorage().getLocation());
-                FileSystem externalFileSystem = hdfsEnvironment.getFileSystem(metastoreUser, externalLocation);
+                FileSystem externalFileSystem = hdfsEnvironment.getFileSystem(hdfsContext, externalLocation);
                 if (!externalFileSystem.isDirectory(externalLocation)) {
                     throw new PrestoException(HIVE_METASTORE_ERROR, "External table location does not exist");
                 }
@@ -249,10 +254,22 @@ public class FileHiveMetastore
                 .map(tableMetadata -> tableMetadata.toTable(databaseName, tableName, tableMetadataDirectory.toString()));
     }
 
+    @Override
+    public Optional<Map<String, HiveColumnStatistics>> getTableColumnStatistics(String databaseName, String tableName, Set<String> columnNames)
+    {
+        return Optional.of(ImmutableMap.of());
+    }
+
+    @Override
+    public Optional<Map<String, Map<String, HiveColumnStatistics>>> getPartitionColumnStatistics(String databaseName, String tableName, Set<String> partitionNames, Set<String> columnNames)
+    {
+        return Optional.of(ImmutableMap.of());
+    }
+
     private Table getRequiredTable(String databaseName, String tableName)
     {
         return getTable(databaseName, tableName)
-                    .orElseThrow(() -> new TableNotFoundException(new SchemaTableName(databaseName, tableName)));
+                .orElseThrow(() -> new TableNotFoundException(new SchemaTableName(databaseName, tableName)));
     }
 
     private void verifyTableNotExists(String newDatabaseName, String newTableName)
@@ -414,6 +431,27 @@ public class FileHiveMetastore
         });
     }
 
+    @Override
+    public synchronized void dropColumn(String databaseName, String tableName, String columnName)
+    {
+        alterTable(databaseName, tableName, oldTable -> {
+            verifyCanDropColumn(this, databaseName, tableName, columnName);
+            if (!oldTable.getColumn(columnName).isPresent()) {
+                SchemaTableName name = new SchemaTableName(databaseName, tableName);
+                throw new ColumnNotFoundException(name, columnName);
+            }
+
+            ImmutableList.Builder<Column> newDataColumns = ImmutableList.builder();
+            for (Column fieldSchema : oldTable.getDataColumns()) {
+                if (!fieldSchema.getName().equals(columnName)) {
+                    newDataColumns.add(fieldSchema);
+                }
+            }
+
+            return oldTable.withDataColumns(newDataColumns.build());
+        });
+    }
+
     private void alterTable(String databaseName, String tableName, Function<TableMetadata, TableMetadata> alterFunction)
     {
         requireNonNull(databaseName, "databaseName is null");
@@ -496,7 +534,7 @@ public class FileHiveMetastore
         else if (table.getTableType().equals(EXTERNAL_TABLE.name())) {
             try {
                 Path externalLocation = new Path(partition.getStorage().getLocation());
-                FileSystem externalFileSystem = hdfsEnvironment.getFileSystem(metastoreUser, externalLocation);
+                FileSystem externalFileSystem = hdfsEnvironment.getFileSystem(hdfsContext, externalLocation);
                 if (!externalFileSystem.isDirectory(externalLocation)) {
                     throw new PrestoException(HIVE_METASTORE_ERROR, "External partition location does not exist");
                 }
@@ -595,7 +633,7 @@ public class FileHiveMetastore
                     childPartitionValues = listPartitions(fileStatus.getPath(), partitionColumns.subList(1, partitionColumns.size()));
                 }
 
-                String value = fileStatus.getPath().getName().substring(directoryPrefix.length());
+                String value = unescapePathName(fileStatus.getPath().getName().substring(directoryPrefix.length()));
                 for (ArrayDeque<String> childPartition : childPartitionValues) {
                     childPartition.addFirst(value);
                     partitionValues.add(childPartition);

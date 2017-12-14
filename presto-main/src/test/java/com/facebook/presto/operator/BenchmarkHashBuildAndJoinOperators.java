@@ -14,15 +14,18 @@
 package com.facebook.presto.operator;
 
 import com.facebook.presto.RowPagesBuilder;
+import com.facebook.presto.execution.Lifespan;
 import com.facebook.presto.operator.HashBuilderOperator.HashBuilderOperatorFactory;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.spiller.SingleStreamSpillerFactory;
 import com.facebook.presto.sql.gen.JoinProbeCompiler;
 import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.testing.TestingTaskContext;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.primitives.Ints;
+import com.google.common.util.concurrent.ListenableFuture;
 import io.airlift.units.DataSize;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
@@ -42,18 +45,26 @@ import org.openjdk.jmh.runner.options.VerboseMode;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Random;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ScheduledExecutorService;
 
 import static com.facebook.presto.RowPagesBuilder.rowPagesBuilder;
 import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
+import static com.facebook.presto.spiller.PartitioningSpillerFactory.unsupportedPartitioningSpillerFactory;
+import static com.google.common.collect.ImmutableList.toImmutableList;
+import static io.airlift.concurrent.MoreFutures.getFutureValue;
 import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static io.airlift.units.DataSize.Unit.GIGABYTE;
 import static java.lang.String.format;
+import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.Executors.newCachedThreadPool;
+import static java.util.concurrent.Executors.newScheduledThreadPool;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.openjdk.jmh.annotations.Mode.AverageTime;
 import static org.openjdk.jmh.annotations.Scope.Thread;
 
@@ -63,7 +74,7 @@ import static org.openjdk.jmh.annotations.Scope.Thread;
 @BenchmarkMode(AverageTime)
 @Fork(3)
 @Warmup(iterations = 5)
-@Measurement(iterations = 20)
+@Measurement(iterations = 10, time = 2, timeUnit = SECONDS)
 public class BenchmarkHashBuildAndJoinOperators
 {
     private static final int HASH_BUILD_OPERATOR_ID = 1;
@@ -75,20 +86,21 @@ public class BenchmarkHashBuildAndJoinOperators
     public static class BuildContext
     {
         protected static final int ROWS_PER_PAGE = 1024;
-        protected static final int BUILD_ROWS_NUMBER = 700_000;
+        protected static final int BUILD_ROWS_NUMBER = 8_000_000;
 
         @Param({"varchar", "bigint", "all"})
-        protected String hashColumns;
+        protected String hashColumns = "bigint";
 
         @Param({"false", "true"})
-        protected boolean buildHashEnabled;
+        protected boolean buildHashEnabled = false;
 
         @Param({"1", "5"})
-        protected int buildRowsRepetition;
+        protected int buildRowsRepetition = 1;
 
         protected ExecutorService executor;
+        protected ScheduledExecutorService scheduledExecutor;
         protected List<Page> buildPages;
-        protected Optional<Integer> hashChannel;
+        protected OptionalInt hashChannel;
         protected List<Type> types;
         protected List<Integer> hashChannels;
 
@@ -108,17 +120,18 @@ public class BenchmarkHashBuildAndJoinOperators
                 default:
                     throw new UnsupportedOperationException(format("Unknown hashColumns value [%s]", hashColumns));
             }
-            executor = newCachedThreadPool(daemonThreadsNamed("test-%s"));
+            executor = newCachedThreadPool(daemonThreadsNamed("test-executor-%s"));
+            scheduledExecutor = newScheduledThreadPool(2, daemonThreadsNamed("test-scheduledExecutor-%s"));
 
             initializeBuildPages();
         }
 
         public TaskContext createTaskContext()
         {
-            return TestingTaskContext.createTaskContext(executor, TEST_SESSION, new DataSize(2, GIGABYTE));
+            return TestingTaskContext.createTaskContext(executor, scheduledExecutor, TEST_SESSION, new DataSize(2, GIGABYTE));
         }
 
-        public Optional<Integer> getHashChannel()
+        public OptionalInt getHashChannel()
         {
             return hashChannel;
         }
@@ -153,7 +166,8 @@ public class BenchmarkHashBuildAndJoinOperators
 
             types = buildPagesBuilder.getTypes();
             buildPages = buildPagesBuilder.build();
-            hashChannel = buildPagesBuilder.getHashChannel();
+            hashChannel = buildPagesBuilder.getHashChannel()
+                    .map(OptionalInt::of).orElse(OptionalInt.empty());
         }
     }
 
@@ -161,18 +175,18 @@ public class BenchmarkHashBuildAndJoinOperators
     public static class JoinContext
             extends BuildContext
     {
-        protected static final int PROBE_ROWS_NUMBER = 700_000;
+        protected static final int PROBE_ROWS_NUMBER = 1_400_000;
 
         @Param({"0.1", "1", "2"})
-        protected double matchRate;
+        protected double matchRate = 1;
 
         @Param({"bigint", "all"})
-        protected String outputColumns;
+        protected String outputColumns = "bigint";
 
         protected List<Page> probePages;
         protected List<Integer> outputChannels;
 
-        protected LookupSourceFactory lookupSourceFactory;
+        protected LookupSourceFactoryManager lookupSourceFactory;
 
         @Override
         @Setup
@@ -198,7 +212,7 @@ public class BenchmarkHashBuildAndJoinOperators
             initializeProbePages();
         }
 
-        public LookupSourceFactory getLookupSourceFactory()
+        public LookupSourceFactoryManager getLookupSourceFactory()
         {
             return lookupSourceFactory;
         }
@@ -262,28 +276,41 @@ public class BenchmarkHashBuildAndJoinOperators
     }
 
     @Benchmark
-    public LookupSourceFactory benchmarkBuildHash(BuildContext buildContext)
+    public LookupSourceFactoryManager benchmarkBuildHash(BuildContext buildContext)
     {
         return benchmarkBuildHash(buildContext, ImmutableList.of(0, 1, 2));
     }
 
-    private LookupSourceFactory benchmarkBuildHash(BuildContext buildContext, List<Integer> outputChannels)
+    private LookupSourceFactoryManager benchmarkBuildHash(BuildContext buildContext, List<Integer> outputChannels)
     {
         DriverContext driverContext = buildContext.createTaskContext().addPipelineContext(0, true, true).addDriverContext();
 
+        LookupSourceFactoryManager lookupSourceFactoryManager = LookupSourceFactoryManager.allAtOnce(new PartitionedLookupSourceFactory(
+                buildContext.getTypes(),
+                outputChannels.stream()
+                        .map(buildContext.getTypes()::get)
+                        .collect(toImmutableList()),
+                buildContext.getHashChannels().stream()
+                        .map(buildContext.getTypes()::get)
+                        .collect(toImmutableList()),
+                1,
+                requireNonNull(ImmutableMap.of(), "layout is null"),
+                false));
         HashBuilderOperatorFactory hashBuilderOperatorFactory = new HashBuilderOperatorFactory(
                 HASH_BUILD_OPERATOR_ID,
                 TEST_PLAN_NODE_ID,
                 buildContext.getTypes(),
+                lookupSourceFactoryManager,
                 outputChannels,
-                ImmutableMap.of(),
                 buildContext.getHashChannels(),
                 buildContext.getHashChannel(),
-                false,
                 Optional.empty(),
+                Optional.empty(),
+                ImmutableList.of(),
                 10_000,
-                1,
-                new PagesIndex.TestingFactory());
+                new PagesIndex.TestingFactory(false),
+                false,
+                SingleStreamSpillerFactory.unsupportedSingleStreamSpillerFactory());
 
         Operator operator = hashBuilderOperatorFactory.createOperator(driverContext);
         for (Page page : buildContext.getBuildPages()) {
@@ -291,26 +318,29 @@ public class BenchmarkHashBuildAndJoinOperators
         }
         operator.finish();
 
-        if (!hashBuilderOperatorFactory.getLookupSourceFactory().createLookupSource().isDone()) {
-            throw new AssertionError("Expected lookup source to be done");
+        LookupSourceFactory lookupSourceFactory = lookupSourceFactoryManager.forLifespan(Lifespan.taskWide());
+        ListenableFuture<LookupSourceProvider> lookupSourceProvider = lookupSourceFactory.createLookupSourceProvider();
+        if (!lookupSourceProvider.isDone()) {
+            throw new AssertionError("Expected lookup source provider to be ready");
         }
+        getFutureValue(lookupSourceProvider).close();
 
-        return hashBuilderOperatorFactory.getLookupSourceFactory();
+        return lookupSourceFactoryManager;
     }
 
     @Benchmark
     public List<Page> benchmarkJoinHash(JoinContext joinContext)
     {
-        LookupSourceFactory lookupSourceFactory = joinContext.getLookupSourceFactory();
-
         OperatorFactory joinOperatorFactory = LOOKUP_JOIN_OPERATORS.innerJoin(
                 HASH_JOIN_OPERATOR_ID,
                 TEST_PLAN_NODE_ID,
-                lookupSourceFactory,
+                joinContext.getLookupSourceFactory(),
                 joinContext.getTypes(),
                 joinContext.getHashChannels(),
                 joinContext.getHashChannel(),
-                Optional.of(joinContext.getOutputChannels()));
+                Optional.of(joinContext.getOutputChannels()),
+                OptionalInt.empty(),
+                unsupportedPartitioningSpillerFactory());
 
         DriverContext driverContext = joinContext.createTaskContext().addPipelineContext(0, true, true).addDriverContext();
         Operator joinOperator = joinOperatorFactory.createOperator(driverContext);

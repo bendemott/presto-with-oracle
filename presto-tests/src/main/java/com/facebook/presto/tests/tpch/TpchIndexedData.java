@@ -46,7 +46,7 @@ import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static java.util.Objects.requireNonNull;
 
-class TpchIndexedData
+public class TpchIndexedData
 {
     private final Map<Set<TpchScaledColumn>, IndexedTable> indexedTables;
 
@@ -72,7 +72,7 @@ class TpchIndexedData
                         .collect(toImmutableSet());
 
                 TpchTable<?> tpchTable = TpchTable.getTable(table.getTableName());
-                RecordSet recordSet = tpchRecordSetProvider.getRecordSet(tpchTable, ImmutableList.copyOf(columnHandles.values()), table.getScaleFactor(), 0, 1);
+                RecordSet recordSet = tpchRecordSetProvider.getRecordSet(tpchTable, ImmutableList.copyOf(columnHandles.values()), table.getScaleFactor(), 0, 1, Optional.empty());
                 IndexedTable indexedTable = indexTable(recordSet, ImmutableList.copyOf(columnHandles.keySet()), keyColumnNames);
                 indexedTablesBuilder.put(keyColumns, indexedTable);
             }

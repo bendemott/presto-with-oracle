@@ -19,8 +19,6 @@ import com.facebook.presto.spi.PageBuilder;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
-import com.facebook.presto.spi.block.BlockBuilderStatus;
-import com.facebook.presto.spi.block.InterleavedBlockBuilder;
 import com.facebook.presto.spi.type.NamedTypeSignature;
 import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.Type;
@@ -54,12 +52,11 @@ import static com.google.common.base.Preconditions.checkState;
 import static io.airlift.slice.Slices.utf8Slice;
 import static io.airlift.slice.Slices.wrappedBuffer;
 import static java.util.stream.Collectors.toList;
-import static org.joda.time.DateTimeZone.UTC;
 
 public class MongoPageSource
         implements ConnectorPageSource
 {
-    private static final ISOChronology UTC_CHRONOLOGY = ISOChronology.getInstance(UTC);
+    private static final ISOChronology UTC_CHRONOLOGY = ISOChronology.getInstanceUTC();
     private static final int ROWS_PER_REQUEST = 1024;
 
     private final MongoCursor<Document> cursor;
@@ -67,7 +64,6 @@ public class MongoPageSource
     private final List<Type> columnTypes;
     private Document currentDoc;
     private long count;
-    private long totalCount;
     private boolean finished;
 
     public MongoPageSource(
@@ -79,12 +75,6 @@ public class MongoPageSource
         this.columnTypes = columns.stream().map(MongoColumnHandle::getType).collect(toList());
         this.cursor = mongoSession.execute(split, columns);
         currentDoc = null;
-    }
-
-    @Override
-    public long getTotalBytes()
-    {
-        return totalCount;
     }
 
     @Override
@@ -132,7 +122,6 @@ public class MongoPageSource
             }
         }
 
-        totalCount += count;
         return pageBuilder.build();
     }
 
@@ -214,18 +203,18 @@ public class MongoPageSource
     {
         if (isArrayType(type)) {
             if (value instanceof List<?>) {
-                BlockBuilder builder = createParametersBlockBuilder(type, ((List<?>) value).size());
+                BlockBuilder builder = output.beginBlockEntry();
 
                 ((List<?>) value).forEach(element ->
                         appendTo(type.getTypeParameters().get(0), element, builder));
 
-                type.writeObject(output, builder.build());
+                output.closeEntry();
                 return;
             }
         }
         else if (isMapType(type)) {
             if (value instanceof List<?>) {
-                BlockBuilder builder = createParametersBlockBuilder(type, ((List<?>) value).size());
+                BlockBuilder builder = output.beginBlockEntry();
                 for (Object element : (List<?>) value) {
                     if (!(element instanceof Map<?, ?>)) {
                         continue;
@@ -238,28 +227,28 @@ public class MongoPageSource
                     }
                 }
 
-                type.writeObject(output, builder.build());
+                output.closeEntry();
                 return;
             }
         }
         else if (isRowType(type)) {
             if (value instanceof Map) {
                 Map<?, ?> mapValue = (Map<?, ?>) value;
-                BlockBuilder builder = createParametersBlockBuilder(type, mapValue.size());
+                BlockBuilder builder = output.beginBlockEntry();
                 List<String> fieldNames = type.getTypeSignature().getParameters().stream()
-                                        .map(TypeSignatureParameter::getNamedTypeSignature)
-                                        .map(NamedTypeSignature::getName)
-                                        .collect(Collectors.toList());
+                        .map(TypeSignatureParameter::getNamedTypeSignature)
+                        .map(NamedTypeSignature::getName)
+                        .collect(Collectors.toList());
                 checkState(fieldNames.size() == type.getTypeParameters().size(), "fieldName doesn't match with type size : %s", type);
                 for (int index = 0; index < type.getTypeParameters().size(); index++) {
                     appendTo(type.getTypeParameters().get(index), mapValue.get(fieldNames.get(index).toString()), builder);
                 }
-                type.writeObject(output, builder.build());
+                output.closeEntry();
                 return;
             }
             else if (value instanceof List<?>) {
                 List<?> listValue = (List<?>) value;
-                BlockBuilder builder = createParametersBlockBuilder(type, listValue.size());
+                BlockBuilder builder = output.beginBlockEntry();
                 for (int index = 0; index < type.getTypeParameters().size(); index++) {
                     if (index < listValue.size()) {
                         appendTo(type.getTypeParameters().get(index), listValue.get(index), builder);
@@ -268,7 +257,7 @@ public class MongoPageSource
                         builder.appendNull();
                     }
                 }
-                type.writeObject(output, builder.build());
+                output.closeEntry();
                 return;
             }
         }
@@ -280,18 +269,9 @@ public class MongoPageSource
         output.appendNull();
     }
 
-    private BlockBuilder createParametersBlockBuilder(Type type, int size)
-    {
-        List<Type> params = type.getTypeParameters();
-        if (isArrayType(type)) {
-            return params.get(0).createBlockBuilder(new BlockBuilderStatus(), size);
-        }
-
-        return new InterleavedBlockBuilder(params, new BlockBuilderStatus(), size * params.size());
-    }
-
     @Override
-    public void close() throws IOException
+    public void close()
+            throws IOException
     {
         cursor.close();
     }

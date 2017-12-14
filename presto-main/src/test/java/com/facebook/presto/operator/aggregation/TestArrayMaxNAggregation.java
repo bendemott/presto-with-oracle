@@ -17,8 +17,8 @@ import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
+import com.facebook.presto.spi.type.ArrayType;
 import com.facebook.presto.spi.type.StandardTypes;
-import com.facebook.presto.type.ArrayType;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
 import org.testng.annotations.Test;
@@ -108,7 +108,7 @@ public class TestArrayMaxNAggregation
 
     private void testCustomAggregation(Long[] values, int n)
     {
-        PriorityQueue<Long> heap = new PriorityQueue<Long>(n);
+        PriorityQueue<Long> heap = new PriorityQueue<>(n);
         Arrays.stream(values).filter(x -> x != null).forEach(heap::add);
         ImmutableList.Builder<List<Long>> expected = new ImmutableList.Builder<>();
         for (int i = heap.size() - 1; i >= 0; i--) {

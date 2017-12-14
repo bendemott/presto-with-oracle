@@ -18,6 +18,7 @@ import com.facebook.presto.ScheduledSplit;
 import com.facebook.presto.Session;
 import com.facebook.presto.TaskSource;
 import com.facebook.presto.execution.FutureStateChange;
+import com.facebook.presto.execution.Lifespan;
 import com.facebook.presto.execution.NodeTaskMap.PartitionedSplitCountTracker;
 import com.facebook.presto.execution.RemoteTask;
 import com.facebook.presto.execution.StateMachine.StateChangeListener;
@@ -122,6 +123,8 @@ public final class HttpRemoteTask
     @GuardedBy("this")
     private volatile int pendingSourceSplitCount;
     @GuardedBy("this")
+    private final SetMultimap<PlanNodeId, Lifespan> pendingNoMoreSplitsForLifespan = HashMultimap.create();
+    @GuardedBy("this")
     private final Set<PlanNodeId> noMoreSplits = new HashSet<>();
     @GuardedBy("this")
     private final AtomicReference<OutputBuffers> outputBuffers = new AtomicReference<>();
@@ -216,7 +219,7 @@ public final class HttpRemoteTask
                     .map(outputId -> new BufferInfo(outputId, false, 0, 0, PageBufferInfo.empty()))
                     .collect(toImmutableList());
 
-            TaskInfo initialTask = createInitialTask(taskId, location, bufferStates, new TaskStats(DateTime.now(), null));
+            TaskInfo initialTask = createInitialTask(taskId, location, nodeId, bufferStates, new TaskStats(DateTime.now(), null));
 
             this.taskStatusFetcher = new ContinuousTaskStatusFetcher(
                     this::failTask,
@@ -308,6 +311,7 @@ public final class HttpRemoteTask
             return;
         }
 
+        boolean needsUpdate = false;
         for (Entry<PlanNodeId, Collection<Split>> entry : splitsBySource.asMap().entrySet()) {
             PlanNodeId sourceId = entry.getKey();
             Collection<Split> splits = entry.getValue();
@@ -323,17 +327,29 @@ public final class HttpRemoteTask
                 pendingSourceSplitCount += added;
                 partitionedSplitCountTracker.setPartitionedSplitCount(getPartitionedSplitCount());
             }
-            needsUpdate.set(true);
+            needsUpdate = true;
         }
         updateSplitQueueSpace();
 
-        scheduleUpdate();
+        if (needsUpdate) {
+            this.needsUpdate.set(true);
+            scheduleUpdate();
+        }
     }
 
     @Override
     public synchronized void noMoreSplits(PlanNodeId sourceId)
     {
         if (noMoreSplits.add(sourceId)) {
+            needsUpdate.set(true);
+            scheduleUpdate();
+        }
+    }
+
+    @Override
+    public synchronized void noMoreSplits(PlanNodeId sourceId, Lifespan lifespan)
+    {
+        if (pendingNoMoreSplitsForLifespan.put(sourceId, lifespan)) {
             needsUpdate.set(true);
             scheduleUpdate();
         }
@@ -427,6 +443,9 @@ public final class HttpRemoteTask
                     removed++;
                 }
             }
+            for (Lifespan lifespan : source.getNoMoreSplitsForLifespan()) {
+                pendingNoMoreSplitsForLifespan.remove(planNodeId, lifespan);
+            }
             if (planFragment.isPartitionedSources(planNodeId)) {
                 pendingSourceSplitCount -= removed;
             }
@@ -481,7 +500,8 @@ public final class HttpRemoteTask
         if (sendPlan.get()) {
             fragment = Optional.of(planFragment);
         }
-        TaskUpdateRequest updateRequest = new TaskUpdateRequest(session.toSessionRepresentation(),
+        TaskUpdateRequest updateRequest = new TaskUpdateRequest(
+                session.toSessionRepresentation(),
                 fragment,
                 sources,
                 outputBuffers.get());
@@ -520,9 +540,10 @@ public final class HttpRemoteTask
     {
         Set<ScheduledSplit> splits = pendingSplits.get(planNodeId);
         boolean noMoreSplits = this.noMoreSplits.contains(planNodeId);
+        Set<Lifespan> noMoreSplitsForLifespan = pendingNoMoreSplitsForLifespan.get(planNodeId);
         TaskSource element = null;
         if (!splits.isEmpty() || noMoreSplits) {
-            element = new TaskSource(planNodeId, splits, noMoreSplits);
+            element = new TaskSource(planNodeId, splits, noMoreSplitsForLifespan, noMoreSplits);
         }
         return element;
     }
@@ -618,27 +639,30 @@ public final class HttpRemoteTask
             @Override
             public void onSuccess(JsonResponse<TaskInfo> result)
             {
-                updateTaskInfo(result.getValue());
+                try {
+                    updateTaskInfo(result.getValue());
+                }
+                finally {
+                    if (!getTaskInfo().getTaskStatus().getState().isDone()) {
+                        cleanUpLocally();
+                    }
+                }
             }
 
             @Override
             public void onFailure(Throwable t)
             {
                 if (t instanceof RejectedExecutionException) {
-                    // client has been shutdown
+                    // TODO: we should only give up retrying when the client has been shutdown
+                    logError(t, "Unable to %s task at %s. Got RejectedExecutionException.", action, request.getUri());
+                    cleanUpLocally();
                     return;
                 }
 
                 // record failure
                 if (cleanupBackoff.failure()) {
-                    logError(t, "Unable to %s task at %s", action, request.getUri());
-                    // Update the taskInfo with the new taskStatus.
-                    // This is required because the query state machine depends on TaskInfo (instead of task status)
-                    // to transition its own state.
-                    // Also, since this TaskInfo is updated in the client the "finalInfo" flag will not be set,
-                    // indicating that the stats are stale.
-                    // TODO: Update the query state machine and stage state machine to depend on TaskStatus instead
-                    updateTaskInfo(getTaskInfo().withTaskStatus(getTaskStatus()));
+                    logError(t, "Unable to %s task at %s. Back off depleted.", action, request.getUri());
+                    cleanUpLocally();
                     return;
                 }
 
@@ -650,6 +674,27 @@ public final class HttpRemoteTask
                 else {
                     errorScheduledExecutor.schedule(() -> doScheduleAsyncCleanupRequest(cleanupBackoff, request, action), delayNanos, NANOSECONDS);
                 }
+            }
+
+            private void cleanUpLocally()
+            {
+                // Update the taskInfo with the new taskStatus.
+
+                // Generally, we send a cleanup request to the worker, and update the TaskInfo on
+                // the coordinator based on what we fetched from the worker. If we somehow cannot
+                // get the cleanup request to the worker, the TaskInfo that we fetch for the worker
+                // likely will not say the task is done however many times we try. In this case,
+                // we have to set the local query info directly so that we stop trying to fetch
+                // updated TaskInfo from the worker. This way, the task on the worker eventually
+                // expires due to lack of activity.
+
+                // This is required because the query state machine depends on TaskInfo (instead of task status)
+                // to transition its own state.
+                // TODO: Update the query state machine and stage state machine to depend on TaskStatus instead
+
+                // Since this TaskInfo is updated in the client the "complete" flag will not be set,
+                // indicating that the stats may not reflect the final stats on the worker.
+                updateTaskInfo(getTaskInfo().withTaskStatus(getTaskStatus()));
             }
         }, executor);
     }

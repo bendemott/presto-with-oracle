@@ -15,6 +15,7 @@ package com.facebook.presto.execution;
 
 import com.facebook.presto.operator.BlockedReason;
 import com.facebook.presto.operator.OperatorStats;
+import com.facebook.presto.operator.TableWriterOperator;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.annotations.VisibleForTesting;
@@ -29,6 +30,7 @@ import java.util.OptionalDouble;
 import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static io.airlift.units.DataSize.succinctBytes;
 import static io.airlift.units.Duration.succinctNanos;
 import static java.lang.Math.min;
 import static java.util.Objects.requireNonNull;
@@ -56,6 +58,7 @@ public class QueryStats
     private final int totalDrivers;
     private final int queuedDrivers;
     private final int runningDrivers;
+    private final int blockedDrivers;
     private final int completedDrivers;
 
     private final double cumulativeMemory;
@@ -79,6 +82,8 @@ public class QueryStats
     private final DataSize outputDataSize;
     private final long outputPositions;
 
+    private final DataSize physicalWrittenDataSize;
+
     private final List<OperatorStats> operatorSummaries;
 
     @VisibleForTesting
@@ -96,6 +101,7 @@ public class QueryStats
         this.finishingTime = null;
         this.totalTasks = 0;
         this.runningTasks = 0;
+        this.blockedDrivers = 0;
         this.completedTasks = 0;
         this.totalDrivers = 0;
         this.queuedDrivers = 0;
@@ -117,6 +123,7 @@ public class QueryStats
         this.processedInputPositions = 0;
         this.outputDataSize = null;
         this.outputPositions = 0;
+        this.physicalWrittenDataSize = null;
         this.operatorSummaries = null;
     }
 
@@ -141,6 +148,7 @@ public class QueryStats
             @JsonProperty("totalDrivers") int totalDrivers,
             @JsonProperty("queuedDrivers") int queuedDrivers,
             @JsonProperty("runningDrivers") int runningDrivers,
+            @JsonProperty("blockedDrivers") int blockedDrivers,
             @JsonProperty("completedDrivers") int completedDrivers,
 
             @JsonProperty("cumulativeMemory") double cumulativeMemory,
@@ -163,6 +171,8 @@ public class QueryStats
 
             @JsonProperty("outputDataSize") DataSize outputDataSize,
             @JsonProperty("outputPositions") long outputPositions,
+
+            @JsonProperty("physicalWrittenDataSize") DataSize physicalWrittenDataSize,
 
             @JsonProperty("operatorSummaries") List<OperatorStats> operatorSummaries)
     {
@@ -191,6 +201,8 @@ public class QueryStats
         this.queuedDrivers = queuedDrivers;
         checkArgument(runningDrivers >= 0, "runningDrivers is negative");
         this.runningDrivers = runningDrivers;
+        checkArgument(blockedDrivers >= 0, "blockedDrivers is negative");
+        this.blockedDrivers = blockedDrivers;
         checkArgument(completedDrivers >= 0, "completedDrivers is negative");
         this.completedDrivers = completedDrivers;
 
@@ -216,6 +228,9 @@ public class QueryStats
         this.outputDataSize = requireNonNull(outputDataSize, "outputDataSize is null");
         checkArgument(outputPositions >= 0, "outputPositions is negative");
         this.outputPositions = outputPositions;
+
+        this.physicalWrittenDataSize = requireNonNull(physicalWrittenDataSize, "physicalWrittenDataSize is null");
+
         this.operatorSummaries = ImmutableList.copyOf(requireNonNull(operatorSummaries, "operatorSummaries is null"));
     }
 
@@ -252,6 +267,10 @@ public class QueryStats
     @JsonProperty
     public Duration getQueuedTime()
     {
+        if (queuedTime == null) {
+            // counter-intuitively, this means that the query is still queued
+            return elapsedTime;
+        }
         return queuedTime;
     }
 
@@ -323,6 +342,12 @@ public class QueryStats
     public int getRunningDrivers()
     {
         return runningDrivers;
+    }
+
+    @JsonProperty
+    public int getBlockedDrivers()
+    {
+        return blockedDrivers;
     }
 
     @JsonProperty
@@ -428,6 +453,31 @@ public class QueryStats
     }
 
     @JsonProperty
+    public DataSize getPhysicalWrittenDataSize()
+    {
+        return physicalWrittenDataSize;
+    }
+
+    @JsonProperty
+    public long getWrittenPositions()
+    {
+        return operatorSummaries.stream()
+                .filter(stats -> stats.getOperatorType().equals(TableWriterOperator.class.getSimpleName()))
+                .mapToLong(stats -> stats.getInputPositions())
+                .sum();
+    }
+
+    @JsonProperty
+    public DataSize getLogicalWrittenDataSize()
+    {
+        return succinctBytes(
+                operatorSummaries.stream()
+                        .filter(stats -> stats.getOperatorType().equals(TableWriterOperator.class.getSimpleName()))
+                        .mapToLong(stats -> stats.getInputDataSize().toBytes())
+                        .sum());
+    }
+
+    @JsonProperty
     public List<OperatorStats> getOperatorSummaries()
     {
         return operatorSummaries;
@@ -437,7 +487,7 @@ public class QueryStats
     public OptionalDouble getProgressPercentage()
     {
         if (!scheduled || totalDrivers == 0) {
-             return OptionalDouble.empty();
+            return OptionalDouble.empty();
         }
         return OptionalDouble.of(min(100, (completedDrivers * 100.0) / totalDrivers));
     }

@@ -103,7 +103,7 @@ public class Histogram
                 outputType);
 
         GenericAccumulatorFactoryBinder factory = AccumulatorCompiler.generateAccumulatorFactoryBinder(metadata, classLoader);
-        return new InternalAggregationFunction(NAME, inputTypes, intermediateType, outputType, true, factory);
+        return new InternalAggregationFunction(NAME, inputTypes, intermediateType, outputType, true, false, factory);
     }
 
     private static List<ParameterMetadata> createInputParameterMetadata(Type keyType)
@@ -156,8 +156,7 @@ public class Histogram
             out.appendNull();
         }
         else {
-            Block block = typedHistogram.serialize();
-            type.writeObject(out, block);
+            typedHistogram.serialize(out);
         }
     }
 }

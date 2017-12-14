@@ -20,15 +20,17 @@ import com.facebook.presto.spi.ConnectorPageSource;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.UpdatablePageSource;
 import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.split.EmptySplit;
+import com.facebook.presto.split.EmptySplitPageSource;
 import com.facebook.presto.split.PageSourceProvider;
 import com.facebook.presto.sql.planner.plan.PlanNodeId;
-import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.SettableFuture;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -91,7 +93,7 @@ public class TableScanOperator
         }
 
         @Override
-        public void close()
+        public void noMoreOperators()
         {
             closed = true;
         }
@@ -159,6 +161,10 @@ public class TableScanOperator
 
         blocked.set(null);
 
+        if (split.getConnectorSplit() instanceof EmptySplit) {
+            source = new EmptySplitPageSource();
+        }
+
         return () -> {
             if (source instanceof UpdatablePageSource) {
                 return Optional.of((UpdatablePageSource) source);
@@ -199,7 +205,7 @@ public class TableScanOperator
                 source.close();
             }
             catch (IOException e) {
-                throw Throwables.propagate(e);
+                throw new UncheckedIOException(e);
             }
             systemMemoryContext.setBytes(source.getSystemMemoryUsage());
         }

@@ -19,12 +19,13 @@ import io.airlift.slice.SliceOutput;
 import io.airlift.slice.Slices;
 import org.openjdk.jol.info.ClassLayout;
 
-import java.util.List;
+import javax.annotation.Nullable;
+
+import java.util.function.BiConsumer;
 
 import static com.facebook.presto.spi.block.BlockUtil.MAX_ARRAY_SIZE;
 import static com.facebook.presto.spi.block.BlockUtil.calculateBlockResetSize;
 import static com.facebook.presto.spi.block.BlockUtil.checkValidPositions;
-import static com.facebook.presto.spi.block.BlockUtil.intSaturatedCast;
 import static io.airlift.slice.SizeOf.SIZE_OF_BYTE;
 import static io.airlift.slice.SizeOf.SIZE_OF_INT;
 import static io.airlift.slice.SizeOf.SIZE_OF_LONG;
@@ -34,8 +35,9 @@ public class FixedWidthBlockBuilder
         extends AbstractFixedWidthBlock
         implements BlockBuilder
 {
-    private static final int INSTANCE_SIZE = ClassLayout.parseClass(FixedWidthBlockBuilder.class).instanceSize() + BlockBuilderStatus.INSTANCE_SIZE;
+    private static final int INSTANCE_SIZE = ClassLayout.parseClass(FixedWidthBlockBuilder.class).instanceSize();
 
+    @Nullable
     private BlockBuilderStatus blockBuilderStatus;
 
     private boolean initialized;
@@ -47,7 +49,7 @@ public class FixedWidthBlockBuilder
 
     private int currentEntrySize;
 
-    public FixedWidthBlockBuilder(int fixedSize, BlockBuilderStatus blockBuilderStatus, int expectedEntries)
+    public FixedWidthBlockBuilder(int fixedSize, @Nullable BlockBuilderStatus blockBuilderStatus, int expectedEntries)
     {
         super(fixedSize);
 
@@ -82,30 +84,43 @@ public class FixedWidthBlockBuilder
     }
 
     @Override
-    public int getSizeInBytes()
+    public long getSizeInBytes()
     {
-        return intSaturatedCast(sliceOutput.size() + valueIsNull.size());
+        return sliceOutput.size() + (long) valueIsNull.size();
     }
 
     @Override
-    public int getRetainedSizeInBytes()
+    public long getRetainedSizeInBytes()
     {
-        return intSaturatedCast(INSTANCE_SIZE + sliceOutput.getRetainedSize() + valueIsNull.getRetainedSize());
+        long size = INSTANCE_SIZE + sliceOutput.getRetainedSize() + valueIsNull.getRetainedSize();
+        if (blockBuilderStatus != null) {
+            size += BlockBuilderStatus.INSTANCE_SIZE;
+        }
+        return size;
     }
 
     @Override
-    public Block copyPositions(List<Integer> positions)
+    public void retainedBytesForEachPart(BiConsumer<Object, Long> consumer)
     {
-        checkValidPositions(positions, positionCount);
+        consumer.accept(sliceOutput, sliceOutput.getRetainedSize());
+        consumer.accept(valueIsNull, valueIsNull.getRetainedSize());
+        consumer.accept(this, (long) INSTANCE_SIZE);
+    }
 
-        SliceOutput newSlice = Slices.allocate(positions.size() * fixedSize).getOutput();
-        SliceOutput newValueIsNull = Slices.allocate(positions.size()).getOutput();
+    @Override
+    public Block copyPositions(int[] positions, int offset, int length)
+    {
+        checkValidPositions(positions, offset, length, positionCount);
 
-        for (int position : positions) {
+        SliceOutput newSlice = Slices.allocate(length * fixedSize).getOutput();
+        SliceOutput newValueIsNull = Slices.allocate(length).getOutput();
+
+        for (int i = offset; i < offset + length; ++i) {
+            int position = positions[i];
             newValueIsNull.appendByte(valueIsNull.getUnderlyingSlice().getByte(position));
             newSlice.appendBytes(getRawSlice().getBytes(position * fixedSize, fixedSize));
         }
-        return new FixedWidthBlock(fixedSize, positions.size(), newSlice.slice(), newValueIsNull.slice());
+        return new FixedWidthBlock(fixedSize, length, newSlice.slice(), newValueIsNull.slice());
     }
 
     @Override
@@ -191,7 +206,9 @@ public class FixedWidthBlockBuilder
         valueIsNull.appendByte(isNull ? 1 : 0);
 
         positionCount++;
-        blockBuilderStatus.addBytes(Byte.BYTES + fixedSize);
+        if (blockBuilderStatus != null) {
+            blockBuilderStatus.addBytes(Byte.BYTES + fixedSize);
+        }
     }
 
     private void checkCapacity()

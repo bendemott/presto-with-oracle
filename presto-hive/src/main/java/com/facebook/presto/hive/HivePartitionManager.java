@@ -25,16 +25,30 @@ import com.facebook.presto.spi.predicate.Domain;
 import com.facebook.presto.spi.predicate.NullableValue;
 import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.predicate.ValueSet;
+import com.facebook.presto.spi.type.BigintType;
+import com.facebook.presto.spi.type.BooleanType;
+import com.facebook.presto.spi.type.CharType;
+import com.facebook.presto.spi.type.DateType;
+import com.facebook.presto.spi.type.DecimalType;
+import com.facebook.presto.spi.type.Decimals;
+import com.facebook.presto.spi.type.DoubleType;
+import com.facebook.presto.spi.type.IntegerType;
+import com.facebook.presto.spi.type.RealType;
+import com.facebook.presto.spi.type.SmallintType;
+import com.facebook.presto.spi.type.TimestampType;
+import com.facebook.presto.spi.type.TinyintType;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
+import com.facebook.presto.spi.type.VarcharType;
 import com.google.common.base.Predicates;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Maps;
 import io.airlift.slice.Slice;
 import org.apache.hadoop.hive.common.FileUtils;
-import org.apache.hadoop.hive.metastore.ProtectMode;
 import org.joda.time.DateTimeZone;
+import org.joda.time.format.DateTimeFormatter;
+import org.joda.time.format.ISODateTimeFormat;
 
 import javax.inject.Inject;
 
@@ -42,6 +56,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 
 import static com.facebook.presto.hive.HiveBucketing.HiveBucket;
 import static com.facebook.presto.hive.HiveBucketing.getHiveBucketHandle;
@@ -49,21 +64,21 @@ import static com.facebook.presto.hive.HiveBucketing.getHiveBucketNumbers;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_EXCEEDED_PARTITION_LIMIT;
 import static com.facebook.presto.hive.HiveUtil.getPartitionKeyColumnHandles;
 import static com.facebook.presto.hive.HiveUtil.parsePartitionValue;
+import static com.facebook.presto.hive.metastore.MetastoreUtil.getProtectMode;
+import static com.facebook.presto.hive.metastore.MetastoreUtil.verifyOnline;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
+import static com.facebook.presto.spi.type.Chars.padSpaces;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Predicates.not;
-import static com.google.common.base.Strings.isNullOrEmpty;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toList;
-import static org.apache.hadoop.hive.metastore.ProtectMode.getProtectModeFromString;
 
 public class HivePartitionManager
 {
     public static final String PRESTO_OFFLINE = "presto_offline";
     private static final String PARTITION_VALUE_WILDCARD = "";
 
-    private final String connectorId;
     private final DateTimeZone timeZone;
     private final boolean assumeCanonicalPartitionKeys;
     private final int maxPartitions;
@@ -72,11 +87,10 @@ public class HivePartitionManager
 
     @Inject
     public HivePartitionManager(
-            HiveConnectorId connectorId,
             TypeManager typeManager,
             HiveClientConfig hiveClientConfig)
     {
-        this(connectorId,
+        this(
                 typeManager,
                 hiveClientConfig.getDateTimeZone(),
                 hiveClientConfig.isAssumeCanonicalPartitionKeys(),
@@ -85,14 +99,12 @@ public class HivePartitionManager
     }
 
     public HivePartitionManager(
-            HiveConnectorId connectorId,
             TypeManager typeManager,
             DateTimeZone timeZone,
             boolean assumeCanonicalPartitionKeys,
             int maxPartitions,
             int domainCompactionThreshold)
     {
-        this.connectorId = requireNonNull(connectorId, "connectorId is null").toString();
         this.timeZone = requireNonNull(timeZone, "timeZone is null");
         this.assumeCanonicalPartitionKeys = assumeCanonicalPartitionKeys;
         checkArgument(maxPartitions >= 1, "maxPartitions must be at least 1");
@@ -109,20 +121,22 @@ public class HivePartitionManager
 
         SchemaTableName tableName = hiveTableHandle.getSchemaTableName();
         Table table = getTable(metastore, tableName);
-        Optional<HiveBucketHandle> hiveBucketHandle = getHiveBucketHandle(connectorId, table);
+        Optional<HiveBucketHandle> hiveBucketHandle = getHiveBucketHandle(table);
 
-        List<HiveColumnHandle> partitionColumns = getPartitionKeyColumnHandles(connectorId, table);
-        List<HiveBucket> buckets = getHiveBucketNumbers(table, effectivePredicate);
-        TupleDomain<HiveColumnHandle> compactEffectivePredicate = toCompactTupleDomain(effectivePredicate, domainCompactionThreshold);
+        List<HiveColumnHandle> partitionColumns = getPartitionKeyColumnHandles(table);
 
         if (effectivePredicate.isNone()) {
-            return new HivePartitionResult(partitionColumns, ImmutableList.of(), TupleDomain.none(), TupleDomain.none(), hiveBucketHandle);
+            return new HivePartitionResult(partitionColumns, ImmutableList.of(), TupleDomain.none(), TupleDomain.none(), TupleDomain.none(), hiveBucketHandle);
         }
+
+        List<HiveBucket> buckets = getHiveBucketNumbers(table, effectivePredicate);
+        TupleDomain<HiveColumnHandle> compactEffectivePredicate = toCompactTupleDomain(effectivePredicate, domainCompactionThreshold);
 
         if (partitionColumns.isEmpty()) {
             return new HivePartitionResult(
                     partitionColumns,
-                    ImmutableList.of(new HivePartition(tableName, compactEffectivePredicate, buckets)),
+                    ImmutableList.of(new HivePartition(tableName, buckets)),
+                    compactEffectivePredicate,
                     effectivePredicate,
                     TupleDomain.none(),
                     hiveBucketHandle);
@@ -148,32 +162,32 @@ public class HivePartitionManager
                             maxPartitions));
                 }
                 partitionCount++;
-                partitions.add(new HivePartition(tableName, compactEffectivePredicate, partitionName, values.get(), buckets));
+                partitions.add(new HivePartition(tableName, partitionName, values.get(), buckets));
             }
         }
 
         // All partition key domains will be fully evaluated, so we don't need to include those
         TupleDomain<ColumnHandle> remainingTupleDomain = TupleDomain.withColumnDomains(Maps.filterKeys(effectivePredicate.getDomains().get(), not(Predicates.in(partitionColumns))));
         TupleDomain<ColumnHandle> enforcedTupleDomain = TupleDomain.withColumnDomains(Maps.filterKeys(effectivePredicate.getDomains().get(), Predicates.in(partitionColumns)));
-        return new HivePartitionResult(partitionColumns, partitions.build(), remainingTupleDomain, enforcedTupleDomain, hiveBucketHandle);
+        return new HivePartitionResult(partitionColumns, partitions.build(), compactEffectivePredicate, remainingTupleDomain, enforcedTupleDomain, hiveBucketHandle);
     }
 
     private static TupleDomain<HiveColumnHandle> toCompactTupleDomain(TupleDomain<ColumnHandle> effectivePredicate, int threshold)
     {
-        checkArgument(effectivePredicate.getDomains().isPresent());
-
         ImmutableMap.Builder<HiveColumnHandle, Domain> builder = ImmutableMap.builder();
-        for (Map.Entry<ColumnHandle, Domain> entry : effectivePredicate.getDomains().get().entrySet()) {
-            HiveColumnHandle hiveColumnHandle = (HiveColumnHandle) entry.getKey();
+        effectivePredicate.getDomains().ifPresent(domains -> {
+            for (Map.Entry<ColumnHandle, Domain> entry : domains.entrySet()) {
+                HiveColumnHandle hiveColumnHandle = (HiveColumnHandle) entry.getKey();
 
-            ValueSet values = entry.getValue().getValues();
-            ValueSet compactValueSet = values.getValuesProcessor().<Optional<ValueSet>>transform(
-                    ranges -> ranges.getRangeCount() > threshold ? Optional.of(ValueSet.ofRanges(ranges.getSpan())) : Optional.empty(),
-                    discreteValues -> discreteValues.getValues().size() > threshold ? Optional.of(ValueSet.all(values.getType())) : Optional.empty(),
-                    allOrNone -> Optional.empty())
-                    .orElse(values);
-            builder.put(hiveColumnHandle, Domain.create(compactValueSet, entry.getValue().isNullAllowed()));
-        }
+                ValueSet values = entry.getValue().getValues();
+                ValueSet compactValueSet = values.getValuesProcessor().<Optional<ValueSet>>transform(
+                        ranges -> ranges.getRangeCount() > threshold ? Optional.of(ValueSet.ofRanges(ranges.getSpan())) : Optional.empty(),
+                        discreteValues -> discreteValues.getValues().size() > threshold ? Optional.of(ValueSet.all(values.getType())) : Optional.empty(),
+                        allOrNone -> Optional.empty())
+                        .orElse(values);
+                builder.put(hiveColumnHandle, Domain.create(compactValueSet, entry.getValue().isNullAllowed()));
+            }
+        });
         return TupleDomain.withColumnDomains(builder.build());
     }
 
@@ -209,17 +223,7 @@ public class HivePartitionManager
             throw new TableNotFoundException(tableName);
         }
         Table table = target.get();
-
-        String protectMode = table.getParameters().get(ProtectMode.PARAMETER_NAME);
-        if (protectMode != null && getProtectModeFromString(protectMode).offline) {
-            throw new TableOfflineException(tableName, false, null);
-        }
-
-        String prestoOffline = table.getParameters().get(PRESTO_OFFLINE);
-        if (!isNullOrEmpty(prestoOffline)) {
-            throw new TableOfflineException(tableName, true, prestoOffline);
-        }
-
+        verifyOnline(tableName, Optional.empty(), getProtectMode(table), table.getParameters());
         return table;
     }
 
@@ -232,23 +236,52 @@ public class HivePartitionManager
             Domain domain = effectivePredicate.getDomains().get().get(partitionKey);
             if (domain != null && domain.isNullableSingleValue()) {
                 Object value = domain.getNullableSingleValue();
+                Type type = domain.getType();
                 if (value == null) {
                     filter.add(HivePartitionKey.HIVE_DEFAULT_DYNAMIC_PARTITION);
                 }
-                else if (value instanceof Slice) {
-                    filter.add(((Slice) value).toStringUtf8());
+                else if (type instanceof CharType) {
+                    Slice slice = (Slice) value;
+                    filter.add(padSpaces(slice, type).toStringUtf8());
                 }
-                else if ((value instanceof Boolean) || (value instanceof Double) || (value instanceof Long)) {
-                    if (assumeCanonicalPartitionKeys) {
-                        filter.add(value.toString());
-                    }
-                    else {
-                        // Hive treats '0', 'false', and 'False' the same. However, the metastore differentiates between these.
-                        filter.add(PARTITION_VALUE_WILDCARD);
-                    }
+                else if (type instanceof VarcharType) {
+                    Slice slice = (Slice) value;
+                    filter.add(slice.toStringUtf8());
+                }
+                // Types above this have only a single possible representation for each value.
+                // Types below this may have multiple representations for a single value.  For
+                // example, a boolean column may represent the false value as "0", "false" or "False".
+                // The metastore distinguishes between these representations, so we cannot prune partitions
+                // unless we know that all partition values use the canonical Java representation.
+                else if (!assumeCanonicalPartitionKeys) {
+                    filter.add(PARTITION_VALUE_WILDCARD);
+                }
+                else if (type instanceof DecimalType && !((DecimalType) type).isShort()) {
+                    Slice slice = (Slice) value;
+                    filter.add(Decimals.toString(slice, ((DecimalType) type).getScale()));
+                }
+                else if (type instanceof DecimalType && ((DecimalType) type).isShort()) {
+                    filter.add(Decimals.toString((long) value, ((DecimalType) type).getScale()));
+                }
+                else if (type instanceof DateType) {
+                    DateTimeFormatter dateTimeFormatter = ISODateTimeFormat.date().withZoneUTC();
+                    filter.add(dateTimeFormatter.print(TimeUnit.DAYS.toMillis((long) value)));
+                }
+                else if (type instanceof TimestampType) {
+                    // we don't have time zone info, so just add a wildcard
+                    filter.add(PARTITION_VALUE_WILDCARD);
+                }
+                else if (type instanceof TinyintType
+                        || type instanceof SmallintType
+                        || type instanceof IntegerType
+                        || type instanceof BigintType
+                        || type instanceof DoubleType
+                        || type instanceof RealType
+                        || type instanceof BooleanType) {
+                    filter.add(value.toString());
                 }
                 else {
-                    throw new PrestoException(NOT_SUPPORTED, "Only Boolean, Double and Long partition keys are supported");
+                    throw new PrestoException(NOT_SUPPORTED, format("Unsupported partition key type: %s", type.getDisplayName()));
                 }
             }
             else {

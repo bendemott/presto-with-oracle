@@ -29,7 +29,6 @@ import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.VarcharType;
 import com.google.common.base.Joiner;
 import com.google.common.base.Splitter;
-import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import io.airlift.compress.lzo.LzoCodec;
 import io.airlift.compress.lzo.LzopCodec;
@@ -92,11 +91,12 @@ import static com.facebook.presto.hive.HiveErrorCode.HIVE_SERDE_NOT_FOUND;
 import static com.facebook.presto.hive.HivePartitionKey.HIVE_DEFAULT_DYNAMIC_PARTITION;
 import static com.facebook.presto.hive.RetryDriver.retry;
 import static com.facebook.presto.hive.metastore.MetastoreUtil.getHiveSchema;
+import static com.facebook.presto.hive.util.ConfigurationUtils.toJobConf;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.Chars.isCharType;
-import static com.facebook.presto.spi.type.Chars.trimSpaces;
+import static com.facebook.presto.spi.type.Chars.trimTrailingSpaces;
 import static com.facebook.presto.spi.type.DateType.DATE;
 import static com.facebook.presto.spi.type.DecimalType.createDecimalType;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
@@ -153,7 +153,7 @@ public final class HiveUtil
                 DateTimeFormat.forPattern("yyyy-M-d H:m:s.SSS").getParser(),
                 DateTimeFormat.forPattern("yyyy-M-d H:m:s.SSSSSSS").getParser(),
                 DateTimeFormat.forPattern("yyyy-M-d H:m:s.SSSSSSSSS").getParser(),
-                };
+        };
         DateTimePrinter timestampWithoutTimeZonePrinter = DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss.SSSSSSSSS").getPrinter();
         HIVE_TIMESTAMP_PARSER = new DateTimeFormatterBuilder().append(timestampWithoutTimeZonePrinter, timestampWithoutTimeZoneParser).toFormatter().withZoneUTC();
     }
@@ -172,7 +172,7 @@ public final class HiveUtil
         setReadColumns(configuration, readHiveColumnIndexes);
 
         InputFormat<?, ?> inputFormat = getInputFormat(configuration, schema, true);
-        JobConf jobConf = new JobConf(configuration);
+        JobConf jobConf = toJobConf(configuration);
         FileSplit fileSplit = new FileSplit(path, start, length, (String[]) null);
 
         // propagate serialization configuration to getRecordReader
@@ -216,7 +216,7 @@ public final class HiveUtil
     {
         String inputFormatName = getInputFormatName(schema);
         try {
-            JobConf jobConf = new JobConf(configuration);
+            JobConf jobConf = toJobConf(configuration);
 
             Class<? extends InputFormat<?, ?>> inputFormatClass = getInputFormatClass(jobConf, inputFormatName);
             if (symlinkTarget && (inputFormatClass == SymlinkTextInputFormat.class)) {
@@ -242,8 +242,7 @@ public final class HiveUtil
         }
 
         Class<?> clazz = conf.getClassByName(inputFormatName);
-        // TODO: remove redundant cast to Object after IDEA-118533 is fixed
-        return (Class<? extends InputFormat<?, ?>>) (Object) clazz.asSubclass(InputFormat.class);
+        return (Class<? extends InputFormat<?, ?>>) clazz.asSubclass(InputFormat.class);
     }
 
     static String getInputFormatName(Properties schema)
@@ -290,7 +289,7 @@ public final class HiveUtil
             return (boolean) method.invoke(inputFormat, fileSystem, path);
         }
         catch (InvocationTargetException | IllegalAccessException e) {
-            throw Throwables.propagate(e);
+            throw new RuntimeException(e);
         }
     }
 
@@ -307,7 +306,7 @@ public final class HiveUtil
             return (StructObjectInspector) inspector;
         }
         catch (SerDeException e) {
-            throw Throwables.propagate(e);
+            throw new RuntimeException(e);
         }
     }
 
@@ -529,7 +528,7 @@ public final class HiveUtil
 
     public static Optional<DecimalType> getDecimalType(HiveType hiveType)
     {
-        return getDecimalType(hiveType.getHiveTypeName());
+        return getDecimalType(hiveType.getHiveTypeName().toString());
     }
 
     public static Optional<DecimalType> getDecimalType(String hiveTypeName)
@@ -703,7 +702,7 @@ public final class HiveUtil
 
     public static Slice charPartitionKey(String value, String name, Type columnType)
     {
-        Slice partitionKey = trimSpaces(Slices.utf8Slice(value));
+        Slice partitionKey = trimTrailingSpaces(Slices.utf8Slice(value));
         CharType charType = (CharType) columnType;
         if (SliceUtf8.countCodePoints(partitionKey) > charType.getLength()) {
             throw new PrestoException(HIVE_INVALID_PARTITION_VALUE, format("Invalid partition value '%s' for %s partition key: %s", value, columnType.toString(), name));
@@ -716,26 +715,26 @@ public final class HiveUtil
         return ((HiveTableHandle) tableHandle).getSchemaTableName();
     }
 
-    public static List<HiveColumnHandle> hiveColumnHandles(String connectorId, Table table)
+    public static List<HiveColumnHandle> hiveColumnHandles(Table table)
     {
         ImmutableList.Builder<HiveColumnHandle> columns = ImmutableList.builder();
 
         // add the data fields first
-        columns.addAll(getRegularColumnHandles(connectorId, table));
+        columns.addAll(getRegularColumnHandles(table));
 
         // add the partition keys last (like Hive does)
-        columns.addAll(getPartitionKeyColumnHandles(connectorId, table));
+        columns.addAll(getPartitionKeyColumnHandles(table));
 
         // add hidden columns
-        columns.add(pathColumnHandle(connectorId));
+        columns.add(pathColumnHandle());
         if (table.getStorage().getBucketProperty().isPresent()) {
-            columns.add(bucketColumnHandle(connectorId));
+            columns.add(bucketColumnHandle());
         }
 
         return columns.build();
     }
 
-    public static List<HiveColumnHandle> getRegularColumnHandles(String connectorId, Table table)
+    public static List<HiveColumnHandle> getRegularColumnHandles(Table table)
     {
         ImmutableList.Builder<HiveColumnHandle> columns = ImmutableList.builder();
 
@@ -744,7 +743,7 @@ public final class HiveUtil
             // ignore unsupported types rather than failing
             HiveType hiveType = field.getType();
             if (hiveType.isSupportedType()) {
-                columns.add(new HiveColumnHandle(connectorId, field.getName(), hiveType, hiveType.getTypeSignature(), hiveColumnIndex, REGULAR, field.getComment()));
+                columns.add(new HiveColumnHandle(field.getName(), hiveType, hiveType.getTypeSignature(), hiveColumnIndex, REGULAR, field.getComment()));
             }
             hiveColumnIndex++;
         }
@@ -752,7 +751,7 @@ public final class HiveUtil
         return columns.build();
     }
 
-    public static List<HiveColumnHandle> getPartitionKeyColumnHandles(String connectorId, Table table)
+    public static List<HiveColumnHandle> getPartitionKeyColumnHandles(Table table)
     {
         ImmutableList.Builder<HiveColumnHandle> columns = ImmutableList.builder();
 
@@ -762,15 +761,10 @@ public final class HiveUtil
             if (!hiveType.isSupportedType()) {
                 throw new PrestoException(NOT_SUPPORTED, format("Unsupported Hive type %s found in partition keys of table %s.%s", hiveType, table.getDatabaseName(), table.getTableName()));
             }
-            columns.add(new HiveColumnHandle(connectorId, field.getName(), hiveType, hiveType.getTypeSignature(), -1, PARTITION_KEY, field.getComment()));
+            columns.add(new HiveColumnHandle(field.getName(), hiveType, hiveType.getTypeSignature(), -1, PARTITION_KEY, field.getComment()));
         }
 
         return columns.build();
-    }
-
-    public static Slice base64Decode(byte[] bytes)
-    {
-        return Slices.wrappedBuffer(Base64.getDecoder().decode(bytes));
     }
 
     public static void checkCondition(boolean condition, ErrorCodeSupplier errorCode, String formatString, Object... args)

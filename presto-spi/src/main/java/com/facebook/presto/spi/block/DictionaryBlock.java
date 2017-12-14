@@ -17,32 +17,36 @@ import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
 import org.openjdk.jol.info.ClassLayout;
 
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
+import java.util.function.BiConsumer;
 
 import static com.facebook.presto.spi.block.BlockUtil.checkValidPositions;
 import static com.facebook.presto.spi.block.DictionaryId.randomDictionaryId;
 import static io.airlift.slice.SizeOf.sizeOf;
 import static java.lang.Math.min;
-import static java.lang.Math.toIntExact;
+import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 
 public class DictionaryBlock
         implements Block
 {
-    private static final int INSTANCE_SIZE = ClassLayout.parseClass(DictionaryBlock.class).instanceSize();
+    private static final int INSTANCE_SIZE = ClassLayout.parseClass(DictionaryBlock.class).instanceSize() + ClassLayout.parseClass(DictionaryId.class).instanceSize();
 
     private final int positionCount;
     private final Block dictionary;
     private final int idsOffset;
     private final int[] ids;
-    private final int retainedSizeInBytes;
-    private volatile int sizeInBytes = -1;
+    private final long retainedSizeInBytes;
+    private volatile long sizeInBytes = -1;
     private volatile int uniqueIds = -1;
     private final DictionaryId dictionarySourceId;
+
+    public DictionaryBlock(Block dictionary, int[] ids)
+    {
+        this(requireNonNull(ids, "ids is null").length, dictionary, ids);
+    }
 
     public DictionaryBlock(int positionCount, Block dictionary, int[] ids)
     {
@@ -82,7 +86,7 @@ public class DictionaryBlock
         this.dictionary = dictionary;
         this.ids = ids;
         this.dictionarySourceId = requireNonNull(dictionarySourceId, "dictionarySourceId is null");
-        this.retainedSizeInBytes = toIntExact(INSTANCE_SIZE + dictionary.getRetainedSizeInBytes() + sizeOf(ids));
+        this.retainedSizeInBytes = INSTANCE_SIZE + dictionary.getRetainedSizeInBytes() + sizeOf(ids);
 
         if (dictionaryIsCompacted) {
             this.sizeInBytes = this.retainedSizeInBytes;
@@ -187,9 +191,8 @@ public class DictionaryBlock
     }
 
     @Override
-    public int getSizeInBytes()
+    public long getSizeInBytes()
     {
-        // this is racy but is safe because sizeInBytes is an int and the calculation is stable
         if (sizeInBytes < 0) {
             calculateCompactSize();
         }
@@ -198,7 +201,7 @@ public class DictionaryBlock
 
     private void calculateCompactSize()
     {
-        int sizeInBytes = 0;
+        long sizeInBytes = 0;
         int uniqueIds = 0;
         boolean[] seen = new boolean[dictionary.getPositionCount()];
         for (int i = 0; i < positionCount; i++) {
@@ -211,12 +214,12 @@ public class DictionaryBlock
                 seen[position] = true;
             }
         }
-        this.sizeInBytes = sizeInBytes + (positionCount * Integer.BYTES);
+        this.sizeInBytes = sizeInBytes + (Integer.BYTES * (long) positionCount);
         this.uniqueIds = uniqueIds;
     }
 
     @Override
-    public int getRegionSizeInBytes(int positionOffset, int length)
+    public long getRegionSizeInBytes(int positionOffset, int length)
     {
         if (positionOffset == 0 && length == getPositionCount()) {
             // Calculation of getRegionSizeInBytes is expensive in this class.
@@ -224,7 +227,7 @@ public class DictionaryBlock
             return getSizeInBytes();
         }
 
-        int sizeInBytes = 0;
+        long sizeInBytes = 0;
         boolean[] seen = new boolean[dictionary.getPositionCount()];
         for (int i = positionOffset; i < positionOffset + length; i++) {
             int position = getId(i);
@@ -235,13 +238,22 @@ public class DictionaryBlock
                 seen[position] = true;
             }
         }
-        return sizeInBytes + (length * Integer.BYTES);
+        sizeInBytes += Integer.BYTES * (long) length;
+        return sizeInBytes;
     }
 
     @Override
-    public int getRetainedSizeInBytes()
+    public long getRetainedSizeInBytes()
     {
         return retainedSizeInBytes;
+    }
+
+    @Override
+    public void retainedBytesForEachPart(BiConsumer<Object, Long> consumer)
+    {
+        consumer.accept(dictionary, dictionary.getRetainedSizeInBytes());
+        consumer.accept(ids, sizeOf(ids));
+        consumer.accept(this, (long) INSTANCE_SIZE);
     }
 
     @Override
@@ -251,23 +263,24 @@ public class DictionaryBlock
     }
 
     @Override
-    public Block copyPositions(List<Integer> positions)
+    public Block copyPositions(int[] positions, int offset, int length)
     {
-        checkValidPositions(positions, positionCount);
+        checkValidPositions(positions, offset, length, positionCount);
 
-        List<Integer> positionsToCopy = new ArrayList<>();
+        IntArrayList positionsToCopy = new IntArrayList();
         Map<Integer, Integer> oldIndexToNewIndex = new HashMap<>();
-        int[] newIds = new int[positions.size()];
+        int[] newIds = new int[length];
 
-        for (int i = 0; i < positions.size(); i++) {
-            int oldIndex = getId(positions.get(i));
+        for (int i = 0; i < length; i++) {
+            int position = positions[offset + i];
+            int oldIndex = getId(position);
             if (!oldIndexToNewIndex.containsKey(oldIndex)) {
                 oldIndexToNewIndex.put(oldIndex, positionsToCopy.size());
                 positionsToCopy.add(oldIndex);
             }
             newIds[i] = oldIndexToNewIndex.get(oldIndex);
         }
-        return new DictionaryBlock(positions.size(), dictionary.copyPositions(positionsToCopy), newIds);
+        return new DictionaryBlock(dictionary.copyPositions(positionsToCopy.elements(), 0, positionsToCopy.size()), newIds);
     }
 
     @Override
@@ -283,10 +296,10 @@ public class DictionaryBlock
     public Block copyRegion(int position, int length)
     {
         if (position < 0 || length < 0 || position + length > positionCount) {
-            throw new IndexOutOfBoundsException("Invalid position " + position + " in block with " + positionCount + " positions");
+            throw new IndexOutOfBoundsException(format("Invalid position range [%s, %s) in block with %s positions", position, position + length, positionCount));
         }
         int[] newIds = Arrays.copyOfRange(ids, idsOffset + position, idsOffset + position + length);
-        DictionaryBlock dictionaryBlock = new DictionaryBlock(length, dictionary, newIds);
+        DictionaryBlock dictionaryBlock = new DictionaryBlock(dictionary, newIds);
         return dictionaryBlock.compact();
     }
 
@@ -294,6 +307,28 @@ public class DictionaryBlock
     public boolean isNull(int position)
     {
         return dictionary.isNull(getId(position));
+    }
+
+    @Override
+    public Block getPositions(int[] positions)
+    {
+        int length = positions.length;
+        int[] newIds = new int[length];
+        boolean isCompact = isCompact() && length >= dictionary.getPositionCount();
+        boolean[] seen = null;
+        if (isCompact) {
+            seen = new boolean[dictionary.getPositionCount()];
+        }
+        for (int i = 0; i < length; i++) {
+            newIds[i] = getId(positions[i]);
+            if (isCompact) {
+                seen[newIds[i]] = true;
+            }
+        }
+        for (int i = 0; i < dictionary.getPositionCount() && isCompact; i++) {
+            isCompact &= seen[i];
+        }
+        return new DictionaryBlock(newIds.length, getDictionary(), newIds, isCompact, getDictionarySourceId());
     }
 
     @Override
@@ -330,7 +365,6 @@ public class DictionaryBlock
 
     public boolean isCompact()
     {
-        // this is racy but is safe because sizeInBytes is an int and the calculation is stable
         if (uniqueIds < 0) {
             calculateCompactSize();
         }
@@ -345,7 +379,7 @@ public class DictionaryBlock
 
         // determine which dictionary entries are referenced and build a reindex for them
         int dictionarySize = dictionary.getPositionCount();
-        List<Integer> dictionaryPositionsToCopy = new ArrayList<>(min(dictionarySize, positionCount));
+        IntArrayList dictionaryPositionsToCopy = new IntArrayList(min(dictionarySize, positionCount));
         int[] remapIndex = new int[dictionarySize];
         Arrays.fill(remapIndex, -1);
 
@@ -374,7 +408,7 @@ public class DictionaryBlock
             newIds[i] = newId;
         }
         try {
-            Block compactDictionary = dictionary.copyPositions(dictionaryPositionsToCopy);
+            Block compactDictionary = dictionary.copyPositions(dictionaryPositionsToCopy.elements(), 0, dictionaryPositionsToCopy.size());
             return new DictionaryBlock(positionCount, compactDictionary, newIds, true);
         }
         catch (UnsupportedOperationException e) {

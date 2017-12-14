@@ -17,11 +17,12 @@ import com.facebook.presto.Session;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.parser.SqlParser;
-import com.facebook.presto.sql.planner.DesugaringRewriter;
-import com.facebook.presto.sql.planner.LambdaCaptureDesugaringRewriter;
+import com.facebook.presto.sql.planner.DesugarAtTimeZoneRewriter;
+import com.facebook.presto.sql.planner.DesugarTryExpressionRewriter;
 import com.facebook.presto.sql.planner.PlanNodeIdAllocator;
 import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.SymbolAllocator;
+import com.facebook.presto.sql.planner.iterative.rule.LambdaCaptureDesugaringRewriter;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
 import com.facebook.presto.sql.planner.plan.AggregationNode.Aggregation;
 import com.facebook.presto.sql.planner.plan.ApplyNode;
@@ -34,20 +35,15 @@ import com.facebook.presto.sql.planner.plan.SimplePlanRewriter;
 import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.sql.planner.plan.ValuesNode;
 import com.facebook.presto.sql.tree.Expression;
-import com.facebook.presto.sql.tree.ExpressionTreeRewriter;
 import com.facebook.presto.sql.tree.FunctionCall;
-import com.facebook.presto.sql.tree.SymbolReference;
-import com.facebook.presto.util.maps.IdentityLinkedHashMap;
 
 import java.util.Map;
 import java.util.Optional;
 
-import static com.facebook.presto.sql.analyzer.ExpressionAnalyzer.getExpressionTypes;
 import static com.facebook.presto.sql.planner.ExpressionExtractor.extractExpressionsNonRecursive;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
-import static java.util.Collections.emptyList;
 import static java.util.Objects.requireNonNull;
 
 public class DesugaringOptimizer
@@ -102,7 +98,7 @@ public class DesugaringOptimizer
         public PlanNode visitAggregation(AggregationNode node, RewriteContext<Void> context)
         {
             PlanNode source = context.rewrite(node.getSource());
-            Map<Symbol, Aggregation> assignments = node.getAssignments().entrySet().stream()
+            Map<Symbol, Aggregation> aggregations = node.getAggregations().entrySet().stream()
                     .collect(toImmutableMap(Map.Entry::getKey, entry -> {
                         Aggregation aggregation = entry.getValue();
                         return new Aggregation((FunctionCall) desugar(aggregation.getCall()), aggregation.getSignature(), aggregation.getMask());
@@ -110,7 +106,7 @@ public class DesugaringOptimizer
             return new AggregationNode(
                     node.getId(),
                     source,
-                    assignments,
+                    aggregations,
                     node.getGroupingSets(),
                     node.getStep(),
                     node.getHashSymbol(),
@@ -189,18 +185,15 @@ public class DesugaringOptimizer
             PlanNode subquery = context.rewrite(node.getSubquery());
             // ApplyNode.Assignments are synthetic expressions which are meaningful for ApplyNode transformations.
             // They cannot contain any lambda or "sugared" expression
-            return new ApplyNode(node.getId(), input, subquery, node.getSubqueryAssignments(), node.getCorrelation());
+            return new ApplyNode(node.getId(), input, subquery, node.getSubqueryAssignments(), node.getCorrelation(), node.getOriginSubquery());
         }
 
         private Expression desugar(Expression expression)
         {
-            if (expression instanceof SymbolReference) {
-                return expression;
-            }
-            IdentityLinkedHashMap<Expression, Type> expressionTypes = getExpressionTypes(session, metadata, sqlParser, types, expression, emptyList() /* parameters already replaced */);
+            expression = DesugarTryExpressionRewriter.rewrite(expression);
+            expression = LambdaCaptureDesugaringRewriter.rewrite(expression, symbolAllocator.getTypes(), symbolAllocator);
+            expression = DesugarAtTimeZoneRewriter.rewrite(expression, session, metadata, sqlParser, symbolAllocator);
 
-            expression = new LambdaCaptureDesugaringRewriter(types, symbolAllocator).rewrite(expression);
-            expression = ExpressionTreeRewriter.rewriteWith(new DesugaringRewriter(expressionTypes), expression);
             return expression;
         }
     }

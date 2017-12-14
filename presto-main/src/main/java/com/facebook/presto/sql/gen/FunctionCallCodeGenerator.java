@@ -22,6 +22,9 @@ import com.facebook.presto.sql.relational.RowExpression;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
+
+import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentType.VALUE_TYPE;
 
 public class FunctionCallCodeGenerator
         implements BytecodeGenerator
@@ -34,8 +37,15 @@ public class FunctionCallCodeGenerator
         ScalarFunctionImplementation function = registry.getScalarFunctionImplementation(signature);
 
         List<BytecodeNode> argumentsBytecode = new ArrayList<>();
-        for (RowExpression argument : arguments) {
-            argumentsBytecode.add(context.generate(argument));
+        for (int i = 0; i < arguments.size(); i++) {
+            RowExpression argument = arguments.get(i);
+            ScalarFunctionImplementation.ArgumentProperty argumentProperty = function.getArgumentProperty(i);
+            if (argumentProperty.getArgumentType() == VALUE_TYPE) {
+                argumentsBytecode.add(context.generate(argument));
+            }
+            else {
+                argumentsBytecode.add(context.generate(argument, Optional.of(argumentProperty.getLambdaInterface())));
+            }
         }
 
         return context.generateCall(signature.getName(), function, argumentsBytecode);

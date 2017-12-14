@@ -35,17 +35,12 @@ import javax.inject.Singleton;
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ExecutorService;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static io.airlift.configuration.ConfigBinder.configBinder;
 import static io.airlift.json.JsonCodecBinder.jsonCodecBinder;
 import static java.lang.Math.toIntExact;
 import static java.util.Objects.requireNonNull;
-import static java.util.concurrent.Executors.newFixedThreadPool;
-import static org.weakref.jmx.ObjectNames.generatedNameOf;
-import static org.weakref.jmx.guice.ExportBinder.newExporter;
 
 public class CassandraClientModule
         implements Module
@@ -66,25 +61,12 @@ public class CassandraClientModule
         binder.bind(CassandraSplitManager.class).in(Scopes.SINGLETON);
         binder.bind(CassandraTokenSplitManager.class).in(Scopes.SINGLETON);
         binder.bind(CassandraRecordSetProvider.class).in(Scopes.SINGLETON);
-        binder.bind(CassandraConnectorRecordSinkProvider.class).in(Scopes.SINGLETON);
+        binder.bind(CassandraPageSinkProvider.class).in(Scopes.SINGLETON);
         binder.bind(CassandraPartitionManager.class).in(Scopes.SINGLETON);
 
         configBinder(binder).bindConfig(CassandraClientConfig.class);
 
-        binder.bind(CachingCassandraSchemaProvider.class).in(Scopes.SINGLETON);
-        newExporter(binder).export(CachingCassandraSchemaProvider.class).as(generatedNameOf(CachingCassandraSchemaProvider.class, connectorId));
-
         jsonCodecBinder(binder).bindListJsonCodec(ExtraColumnMetadata.class);
-    }
-
-    @ForCassandra
-    @Singleton
-    @Provides
-    public static ExecutorService createCachingCassandraSchemaExecutor(CassandraConnectorId clientId, CassandraClientConfig cassandraClientConfig)
-    {
-        return newFixedThreadPool(
-                cassandraClientConfig.getMaxSchemaRefreshThreads(),
-                daemonThreadsNamed("cassandra-" + clientId + "-%s"));
     }
 
     @Singleton
@@ -102,7 +84,6 @@ public class CassandraClientModule
 
         List<String> contactPoints = requireNonNull(config.getContactPoints(), "contactPoints is null");
         checkArgument(!contactPoints.isEmpty(), "empty contactPoints");
-        contactPoints.forEach(clusterBuilder::addContactPoint);
         clusterBuilder.withPort(config.getNativeProtocolPort());
         clusterBuilder.withReconnectionPolicy(new ExponentialReconnectionPolicy(500, 10000));
         clusterBuilder.withRetryPolicy(config.getRetryPolicy().getPolicy());
@@ -157,10 +138,16 @@ public class CassandraClientModule
         if (config.getSpeculativeExecutionLimit() > 1) {
             clusterBuilder.withSpeculativeExecutionPolicy(new ConstantSpeculativeExecutionPolicy(
                     config.getSpeculativeExecutionDelay().toMillis(), // delay before a new execution is launched
-                    config.getSpeculativeExecutionLimit()    // maximum number of executions
-            ));
+                    config.getSpeculativeExecutionLimit())); // maximum number of executions
         }
 
-        return new NativeCassandraSession(connectorId.toString(), extraColumnMetadataCodec, clusterBuilder.build(), config.getNoHostAvailableRetryTimeout());
+        return new NativeCassandraSession(
+                connectorId.toString(),
+                extraColumnMetadataCodec,
+                new ReopeningCluster(() -> {
+                    contactPoints.forEach(clusterBuilder::addContactPoint);
+                    return clusterBuilder.build();
+                }),
+                config.getNoHostAvailableRetryTimeout());
     }
 }

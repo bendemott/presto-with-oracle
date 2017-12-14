@@ -187,12 +187,15 @@ public class TaskResource
         requireNonNull(taskId, "taskId is null");
 
         if (currentState == null || maxWait == null) {
-            TaskStatus taskStatus = taskManager.getTaskInfo(taskId).getTaskStatus();
+            TaskStatus taskStatus = taskManager.getTaskStatus(taskId);
             asyncResponse.resume(taskStatus);
             return;
         }
 
         Duration waitTime = randomizeWaitTime(maxWait);
+        // TODO: With current implementation, a newly completed driver group won't trigger immediate HTTP response,
+        // leading to a slight delay of approx 1 second, which is not a major issue for any query that are heavy weight enough
+        // to justify group-by-group execution. In order to fix this, REST endpoint /v1/{task}/status will need change.
         ListenableFuture<TaskStatus> futureTaskStatus = addTimeout(
                 taskManager.getTaskStatus(taskId, currentState),
                 () -> taskManager.getTaskStatus(taskId),
@@ -290,16 +293,12 @@ public class TaskResource
     @DELETE
     @Path("{taskId}/results/{bufferId}")
     @Produces(MediaType.APPLICATION_JSON)
-    public Response abortResults(@PathParam("taskId") TaskId taskId, @PathParam("bufferId") OutputBufferId bufferId, @Context UriInfo uriInfo)
+    public void abortResults(@PathParam("taskId") TaskId taskId, @PathParam("bufferId") OutputBufferId bufferId, @Context UriInfo uriInfo)
     {
         requireNonNull(taskId, "taskId is null");
         requireNonNull(bufferId, "bufferId is null");
 
-        TaskInfo taskInfo = taskManager.abortTaskResults(taskId, bufferId);
-        if (shouldSummarize(uriInfo)) {
-            taskInfo = taskInfo.summarize();
-        }
-        return Response.ok(taskInfo).build();
+        taskManager.abortTaskResults(taskId, bufferId);
     }
 
     @Managed

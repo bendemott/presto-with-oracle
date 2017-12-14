@@ -84,7 +84,7 @@ Array Functions
 .. function:: element_at(array<E>, index) -> E
 
     Returns element of ``array`` at given ``index``.
-    If ``index`` >= 0, this function provides the same functionality as the SQL-standard subscript operator (``[]``).
+    If ``index`` > 0, this function provides the same functionality as the SQL-standard subscript operator (``[]``).
     If ``index`` < 0, ``element_at`` accesses elements from the last to the first.
 
 .. function:: filter(array, function) -> array
@@ -100,6 +100,10 @@ Array Functions
     :noindex:
 
     See :func:`reduce`.
+
+.. function:: repeat(element, count) -> array
+
+    Repeat ``element`` for ``count`` times.
 
 .. function:: reverse(x) -> array
     :noindex:

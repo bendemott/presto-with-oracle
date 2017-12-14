@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.hive.orc;
 
+import com.facebook.presto.hive.FileFormatDataSourceStats;
 import com.facebook.presto.hive.HiveColumnHandle;
 import com.facebook.presto.orc.OrcCorruptionException;
 import com.facebook.presto.orc.OrcDataSource;
@@ -28,10 +29,10 @@ import com.facebook.presto.spi.block.LazyBlock;
 import com.facebook.presto.spi.block.LazyBlockLoader;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
-import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.List;
 
 import static com.facebook.presto.hive.HiveColumnHandle.ColumnType.REGULAR;
@@ -60,17 +61,22 @@ public class OrcPageSource
 
     private final AggregatedMemoryContext systemMemoryContext;
 
+    private final FileFormatDataSourceStats stats;
+
     public OrcPageSource(
             OrcRecordReader recordReader,
             OrcDataSource orcDataSource,
             List<HiveColumnHandle> columns,
             TypeManager typeManager,
-            AggregatedMemoryContext systemMemoryContext)
+            AggregatedMemoryContext systemMemoryContext,
+            FileFormatDataSourceStats stats)
     {
         this.recordReader = requireNonNull(recordReader, "recordReader is null");
         this.orcDataSource = requireNonNull(orcDataSource, "orcDataSource is null");
 
         int size = requireNonNull(columns, "columns is null").size();
+
+        this.stats = requireNonNull(stats, "stats is null");
 
         this.constantBlocks = new Block[size];
         this.hiveColumnIndexes = new int[size];
@@ -101,12 +107,6 @@ public class OrcPageSource
         columnNames = namesBuilder.build();
 
         this.systemMemoryContext = requireNonNull(systemMemoryContext, "systemMemoryContext is null");
-    }
-
-    @Override
-    public long getTotalBytes()
-    {
-        return recordReader.getSplitLength();
     }
 
     @Override
@@ -170,10 +170,11 @@ public class OrcPageSource
         closed = true;
 
         try {
+            stats.addMaxCombinedBytesPerRow(recordReader.getMaxCombinedBytesPerRow());
             recordReader.close();
         }
         catch (IOException e) {
-            throw Throwables.propagate(e);
+            throw new UncheckedIOException(e);
         }
     }
 

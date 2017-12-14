@@ -14,7 +14,6 @@
 package com.facebook.presto.block;
 
 import com.facebook.presto.spi.block.SliceArrayBlock;
-import com.google.common.primitives.Ints;
 import io.airlift.slice.Slice;
 import org.testng.annotations.Test;
 
@@ -25,8 +24,33 @@ public class TestSliceArrayBlock
     public void test()
     {
         Slice[] expectedValues = createExpectedValues(100);
-        assertVariableWithValues(expectedValues);
-        assertVariableWithValues((Slice[]) alternatingNullValues(expectedValues));
+        assertVariableWithValues(expectedValues, false);
+        assertVariableWithValues((Slice[]) alternatingNullValues(expectedValues), false);
+    }
+
+    @Test
+    public void testNonDistinctSlices()
+    {
+        int positionCount = 5;
+        Slice[] baseSlices = createExpectedUniqueValues(positionCount);
+        Slice[] baseSlicesCopy = createExpectedUniqueValues(positionCount);
+        Slice[] testSlices = new Slice[positionCount * 3];
+        // the first and second five slices point to baseSlices, and the third five slices point to baseSlicesCopy
+        for (int i = 0; i < positionCount; i++) {
+            testSlices[i] = baseSlices[i];
+            testSlices[positionCount + i] = baseSlices[i];
+            testSlices[positionCount * 2 + i] = baseSlicesCopy[i];
+        }
+
+        SliceArrayBlock block = new SliceArrayBlock(testSlices.length, testSlices, false);
+        assertBlock(block, testSlices);
+    }
+
+    @Test
+    public void testDistinctSlices()
+    {
+        Slice[] expectedValues = createExpectedUniqueValues(100);
+        assertVariableWithValues(expectedValues, true);
     }
 
     @Test
@@ -35,12 +59,12 @@ public class TestSliceArrayBlock
     {
         Slice[] expectedValues = (Slice[]) alternatingNullValues(createExpectedValues(100));
         SliceArrayBlock block = new SliceArrayBlock(expectedValues.length, expectedValues);
-        assertBlockFilteredPositions(expectedValues, block, Ints.asList(0, 2, 4, 6, 7, 9, 10, 16));
+        assertBlockFilteredPositions(expectedValues, block, 0, 2, 4, 6, 7, 9, 10, 16);
     }
 
-    private void assertVariableWithValues(Slice[] expectedValues)
+    private void assertVariableWithValues(Slice[] expectedValues, boolean valueSlicesAreDistinct)
     {
-        SliceArrayBlock block = new SliceArrayBlock(expectedValues.length, expectedValues);
+        SliceArrayBlock block = new SliceArrayBlock(expectedValues.length, expectedValues, valueSlicesAreDistinct);
         assertBlock(block, expectedValues);
     }
 }

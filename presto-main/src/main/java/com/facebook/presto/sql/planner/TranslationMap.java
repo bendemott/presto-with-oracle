@@ -25,7 +25,7 @@ import com.facebook.presto.sql.tree.FieldReference;
 import com.facebook.presto.sql.tree.Identifier;
 import com.facebook.presto.sql.tree.LambdaArgumentDeclaration;
 import com.facebook.presto.sql.tree.LambdaExpression;
-import com.facebook.presto.util.maps.IdentityLinkedHashMap;
+import com.facebook.presto.sql.tree.NodeRef;
 import com.google.common.collect.ImmutableList;
 
 import java.util.HashMap;
@@ -45,7 +45,7 @@ class TranslationMap
     // all expressions are rewritten in terms of fields declared by this relation plan
     private final RelationPlan rewriteBase;
     private final Analysis analysis;
-    private final IdentityLinkedHashMap<LambdaArgumentDeclaration, Symbol> lambdaDeclarationToSymbolMap;
+    private final Map<NodeRef<LambdaArgumentDeclaration>, Symbol> lambdaDeclarationToSymbolMap;
 
     // current mappings of underlying field -> symbol for translating direct field references
     private final Symbol[] fieldSymbols;
@@ -54,7 +54,7 @@ class TranslationMap
     private final Map<Expression, Symbol> expressionToSymbols = new HashMap<>();
     private final Map<Expression, Expression> expressionToExpressions = new HashMap<>();
 
-    public TranslationMap(RelationPlan rewriteBase, Analysis analysis, IdentityLinkedHashMap<LambdaArgumentDeclaration, Symbol> lambdaDeclarationToSymbolMap)
+    public TranslationMap(RelationPlan rewriteBase, Analysis analysis, Map<NodeRef<LambdaArgumentDeclaration>, Symbol> lambdaDeclarationToSymbolMap)
     {
         this.rewriteBase = requireNonNull(rewriteBase, "rewriteBase is null");
         this.analysis = requireNonNull(analysis, "analysis is null");
@@ -73,7 +73,7 @@ class TranslationMap
         return analysis;
     }
 
-    public IdentityLinkedHashMap<LambdaArgumentDeclaration, Symbol> getLambdaDeclarationToSymbolMap()
+    public Map<NodeRef<LambdaArgumentDeclaration>, Symbol> getLambdaDeclarationToSymbolMap()
     {
         return lambdaDeclarationToSymbolMap;
     }
@@ -240,7 +240,7 @@ class TranslationMap
             {
                 LambdaArgumentDeclaration referencedLambdaArgumentDeclaration = analysis.getLambdaArgumentReference(node);
                 if (referencedLambdaArgumentDeclaration != null) {
-                    Symbol symbol = lambdaDeclarationToSymbolMap.get(referencedLambdaArgumentDeclaration);
+                    Symbol symbol = lambdaDeclarationToSymbolMap.get(NodeRef.of(referencedLambdaArgumentDeclaration));
                     return coerceIfNecessary(node, symbol.toSymbolReference());
                 }
                 else {
@@ -258,12 +258,14 @@ class TranslationMap
             @Override
             public Expression rewriteDereferenceExpression(DereferenceExpression node, Void context, ExpressionTreeRewriter<Void> treeRewriter)
             {
-                Optional<ResolvedField> resolvedField = rewriteBase.getScope().tryResolveField(node);
-                if (resolvedField.isPresent()) {
-                    if (resolvedField.get().isLocal()) {
-                        return getSymbol(rewriteBase, node)
-                                .map(symbol -> coerceIfNecessary(node, symbol.toSymbolReference()))
-                                .orElseThrow(() -> new IllegalStateException("No symbol mapping for node " + node));
+                if (analysis.isColumnReference(node)) {
+                    Optional<ResolvedField> resolvedField = rewriteBase.getScope().tryResolveField(node);
+                    if (resolvedField.isPresent()) {
+                        if (resolvedField.get().isLocal()) {
+                            return getSymbol(rewriteBase, node)
+                                    .map(symbol -> coerceIfNecessary(node, symbol.toSymbolReference()))
+                                    .orElseThrow(() -> new IllegalStateException("No symbol mapping for node " + node));
+                        }
                     }
                     // do not rewrite outer references, it will be handled in outer scope planner
                     return node;
@@ -278,7 +280,8 @@ class TranslationMap
 
                 ImmutableList.Builder<LambdaArgumentDeclaration> newArguments = ImmutableList.builder();
                 for (LambdaArgumentDeclaration argument : node.getArguments()) {
-                    newArguments.add(new LambdaArgumentDeclaration(lambdaDeclarationToSymbolMap.get(argument).getName()));
+                    Symbol symbol = lambdaDeclarationToSymbolMap.get(NodeRef.of(argument));
+                    newArguments.add(new LambdaArgumentDeclaration(new Identifier(symbol.getName())));
                 }
                 Expression rewrittenBody = treeRewriter.rewrite(node.getBody(), null);
                 return new LambdaExpression(newArguments.build(), rewrittenBody);
@@ -299,11 +302,16 @@ class TranslationMap
         }, expression, null);
     }
 
-    Optional<Symbol> getSymbol(RelationPlan plan, Expression expression)
+    private Optional<Symbol> getSymbol(RelationPlan plan, Expression expression)
     {
+        if (!analysis.isColumnReference(expression)) {
+            // Expression can be a reference to lambda argument (or DereferenceExpression based on lambda argument reference).
+            // In such case, the expression might still be resolvable with plan.getScope() but we should not resolve it.
+            return Optional.empty();
+        }
         return plan.getScope()
                 .tryResolveField(expression)
                 .filter(ResolvedField::isLocal)
-                .map(field -> plan.getFieldMappings().get(field.getHierarchyFieldIndex()));
+                .map(field -> requireNonNull(plan.getFieldMappings().get(field.getHierarchyFieldIndex())));
     }
 }

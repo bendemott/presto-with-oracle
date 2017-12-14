@@ -17,8 +17,8 @@ import com.facebook.presto.resourceGroups.ResourceGroupNameTemplate;
 import com.facebook.presto.resourceGroups.ResourceGroupSpec;
 import com.google.common.collect.ImmutableList;
 import io.airlift.units.Duration;
-import org.skife.jdbi.v2.StatementContext;
-import org.skife.jdbi.v2.tweak.ResultSetMapper;
+import org.jdbi.v3.core.mapper.RowMapper;
+import org.jdbi.v3.core.statement.StatementContext;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -32,12 +32,15 @@ public class ResourceGroupSpecBuilder
     private final ResourceGroupNameTemplate nameTemplate;
     private final String softMemoryLimit;
     private final int maxQueued;
-    private final int maxRunning;
+    private final Optional<Integer> softConcurrencyLimit;
+    private final int hardConcurrencyLimit;
     private final Optional<String> schedulingPolicy;
     private final Optional<Integer> schedulingWeight;
     private final Optional<Boolean> jmxExport;
     private final Optional<Duration> softCpuLimit;
     private final Optional<Duration> hardCpuLimit;
+    private final Optional<Duration> queuedTimeLimit;
+    private final Optional<Duration> runningTimeLimit;
     private final Optional<Long> parentId;
     private final ImmutableList.Builder<ResourceGroupSpec> subGroups = ImmutableList.builder();
 
@@ -46,25 +49,30 @@ public class ResourceGroupSpecBuilder
             ResourceGroupNameTemplate nameTemplate,
             String softMemoryLimit,
             int maxQueued,
-            int maxRunning,
+            Optional<Integer> softConcurrencyLimit,
+            int hardConcurrencyLimit,
             Optional<String> schedulingPolicy,
             Optional<Integer> schedulingWeight,
             Optional<Boolean> jmxExport,
             Optional<String> softCpuLimit,
             Optional<String> hardCpuLimit,
-            Optional<Long> parentId
-    )
+            Optional<String> queuedTimeLimit,
+            Optional<String> runningTimeLimit,
+            Optional<Long> parentId)
     {
         this.id = id;
         this.nameTemplate = nameTemplate;
         this.softMemoryLimit = requireNonNull(softMemoryLimit, "softMemoryLimit is null");
         this.maxQueued = maxQueued;
-        this.maxRunning = maxRunning;
+        this.softConcurrencyLimit = requireNonNull(softConcurrencyLimit, "softConcurrencyLimit is null");
+        this.hardConcurrencyLimit = hardConcurrencyLimit;
         this.schedulingPolicy = requireNonNull(schedulingPolicy, "schedulingPolicy is null");
         this.schedulingWeight = schedulingWeight;
         this.jmxExport = requireNonNull(jmxExport, "jmxExport is null");
         this.softCpuLimit = requireNonNull(softCpuLimit, "softCpuLimit is null").map(Duration::valueOf);
         this.hardCpuLimit = requireNonNull(hardCpuLimit, "hardCpuLimit is null").map(Duration::valueOf);
+        this.queuedTimeLimit = requireNonNull(queuedTimeLimit, "queuedTimeLimit is null").map(Duration::valueOf);
+        this.runningTimeLimit = requireNonNull(runningTimeLimit, "runningTimeLimit is null").map(Duration::valueOf);
         this.parentId = parentId;
     }
 
@@ -104,29 +112,35 @@ public class ResourceGroupSpecBuilder
                 nameTemplate,
                 softMemoryLimit,
                 maxQueued,
-                maxRunning,
+                softConcurrencyLimit,
+                Optional.of(hardConcurrencyLimit),
+                Optional.empty(),
                 schedulingPolicy,
                 schedulingWeight,
                 Optional.of(subGroups.build()),
                 jmxExport,
                 softCpuLimit,
-                hardCpuLimit
-
-        );
+                hardCpuLimit,
+                queuedTimeLimit,
+                runningTimeLimit);
     }
 
     public static class Mapper
-            implements ResultSetMapper<ResourceGroupSpecBuilder>
+            implements RowMapper<ResourceGroupSpecBuilder>
     {
         @Override
-        public ResourceGroupSpecBuilder map(int index, ResultSet resultSet, StatementContext context)
+        public ResourceGroupSpecBuilder map(ResultSet resultSet, StatementContext context)
                 throws SQLException
         {
             long id = resultSet.getLong("resource_group_id");
             ResourceGroupNameTemplate nameTemplate = new ResourceGroupNameTemplate(resultSet.getString("name"));
             String softMemoryLimit = resultSet.getString("soft_memory_limit");
             int maxQueued = resultSet.getInt("max_queued");
-            int maxRunning = resultSet.getInt("max_running");
+            Optional<Integer> softConcurrencyLimit = Optional.of(resultSet.getInt("soft_concurrency_limit"));
+            if (resultSet.wasNull()) {
+                softConcurrencyLimit = Optional.empty();
+            }
+            int hardConcurrencyLimit = resultSet.getInt("hard_concurrency_limit");
             Optional<String> schedulingPolicy = Optional.ofNullable(resultSet.getString("scheduling_policy"));
             Optional<Integer> schedulingWeight = Optional.of(resultSet.getInt("scheduling_weight"));
             if (resultSet.wasNull()) {
@@ -142,19 +156,23 @@ public class ResourceGroupSpecBuilder
             if (resultSet.wasNull()) {
                 parentId = Optional.empty();
             }
+            Optional<String> queuedTimeLimit = Optional.ofNullable(resultSet.getString("queued_time_limit"));
+            Optional<String> runningTimeLimit = Optional.ofNullable(resultSet.getString("running_time_limit"));
             return new ResourceGroupSpecBuilder(
                     id,
                     nameTemplate,
                     softMemoryLimit,
                     maxQueued,
-                    maxRunning,
+                    softConcurrencyLimit,
+                    hardConcurrencyLimit,
                     schedulingPolicy,
                     schedulingWeight,
                     jmxExport,
                     softCpuLimit,
                     hardCpuLimit,
-                    parentId
-            );
+                    queuedTimeLimit,
+                    runningTimeLimit,
+                    parentId);
         }
     }
 }

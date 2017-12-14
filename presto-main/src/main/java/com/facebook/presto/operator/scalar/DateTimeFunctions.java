@@ -22,6 +22,7 @@ import com.facebook.presto.spi.function.SqlType;
 import com.facebook.presto.spi.type.StandardTypes;
 import io.airlift.concurrent.ThreadLocalCache;
 import io.airlift.slice.Slice;
+import io.airlift.units.Duration;
 import org.joda.time.DateTime;
 import org.joda.time.DateTimeField;
 import org.joda.time.Days;
@@ -51,14 +52,13 @@ import static java.lang.Math.toIntExact;
 import static java.util.Locale.ENGLISH;
 import static java.util.concurrent.TimeUnit.DAYS;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
-import static org.joda.time.DateTimeZone.UTC;
 
 public final class DateTimeFunctions
 {
     private static final ThreadLocalCache<Slice, DateTimeFormatter> DATETIME_FORMATTER_CACHE =
             new ThreadLocalCache<>(100, DateTimeFunctions::createDateTimeFormatter);
 
-    private static final ISOChronology UTC_CHRONOLOGY = ISOChronology.getInstance(UTC);
+    private static final ISOChronology UTC_CHRONOLOGY = ISOChronology.getInstanceUTC();
     private static final DateTimeField SECOND_OF_MINUTE = UTC_CHRONOLOGY.secondOfMinute();
     private static final DateTimeField DAY_OF_WEEK = UTC_CHRONOLOGY.dayOfWeek();
     private static final DateTimeField DAY_OF_MONTH = UTC_CHRONOLOGY.dayOfMonth();
@@ -495,11 +495,12 @@ public final class DateTimeFunctions
     public static long parseDatetime(ConnectorSession session, @SqlType("varchar(x)") Slice datetime, @SqlType("varchar(y)") Slice formatString)
     {
         try {
-            return packDateTimeWithZone(parseDateTimeHelper(DateTimeFormat.forPattern(formatString.toStringUtf8())
-                                                .withChronology(getChronology(session.getTimeZoneKey()))
-                                                .withOffsetParsed()
-                                                .withLocale(session.getLocale()),
-                                                datetime.toStringUtf8()));
+            return packDateTimeWithZone(parseDateTimeHelper(
+                    DateTimeFormat.forPattern(formatString.toStringUtf8())
+                            .withChronology(getChronology(session.getTimeZoneKey()))
+                            .withOffsetParsed()
+                            .withLocale(session.getLocale()),
+                    datetime.toStringUtf8()));
         }
         catch (IllegalArgumentException e) {
             throw new PrestoException(INVALID_FUNCTION_ARGUMENT, e);
@@ -541,9 +542,9 @@ public final class DateTimeFunctions
     {
         try {
             return utf8Slice(DateTimeFormat.forPattern(formatString.toStringUtf8())
-                                .withChronology(chronology)
-                                .withLocale(locale)
-                                .print(timestamp));
+                    .withChronology(chronology)
+                    .withLocale(locale)
+                    .print(timestamp));
         }
         catch (IllegalArgumentException e) {
             throw new PrestoException(INVALID_FUNCTION_ARGUMENT, e);
@@ -1074,5 +1075,26 @@ public final class DateTimeFunctions
         catch (UnsupportedOperationException e) {
             throw new PrestoException(INVALID_FUNCTION_ARGUMENT, e);
         }
+    }
+
+    @Description("convert duration string to an interval")
+    @ScalarFunction("parse_duration")
+    @LiteralParameters("x")
+    @SqlType(StandardTypes.INTERVAL_DAY_TO_SECOND)
+    public static long parseDuration(@SqlType("varchar(x)") Slice duration)
+    {
+        try {
+            return Duration.valueOf(duration.toStringUtf8()).toMillis();
+        }
+        catch (IllegalArgumentException e) {
+            throw new PrestoException(INVALID_FUNCTION_ARGUMENT, e);
+        }
+    }
+
+    @ScalarFunction("to_milliseconds")
+    @SqlType(StandardTypes.BIGINT)
+    public static long toMilliseconds(@SqlType(StandardTypes.INTERVAL_DAY_TO_SECOND) long value)
+    {
+        return value;
     }
 }

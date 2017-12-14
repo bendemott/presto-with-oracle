@@ -27,12 +27,14 @@ import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.SymbolAllocator;
 import com.facebook.presto.sql.planner.optimizations.StreamPropertyDerivations.StreamProperties;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
+import com.facebook.presto.sql.planner.plan.ApplyNode;
 import com.facebook.presto.sql.planner.plan.DistinctLimitNode;
 import com.facebook.presto.sql.planner.plan.EnforceSingleRowNode;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
 import com.facebook.presto.sql.planner.plan.ExplainAnalyzeNode;
 import com.facebook.presto.sql.planner.plan.IndexJoinNode;
 import com.facebook.presto.sql.planner.plan.JoinNode;
+import com.facebook.presto.sql.planner.plan.LateralJoinNode;
 import com.facebook.presto.sql.planner.plan.LimitNode;
 import com.facebook.presto.sql.planner.plan.MarkDistinctNode;
 import com.facebook.presto.sql.planner.plan.OutputNode;
@@ -62,6 +64,7 @@ import java.util.Set;
 
 import static com.facebook.presto.SystemSessionProperties.getTaskConcurrency;
 import static com.facebook.presto.SystemSessionProperties.getTaskWriterCount;
+import static com.facebook.presto.SystemSessionProperties.isSpillEnabled;
 import static com.facebook.presto.sql.planner.SystemPartitioningHandle.FIXED_ARBITRARY_DISTRIBUTION;
 import static com.facebook.presto.sql.planner.SystemPartitioningHandle.FIXED_HASH_DISTRIBUTION;
 import static com.facebook.presto.sql.planner.SystemPartitioningHandle.SINGLE_DISTRIBUTION;
@@ -104,7 +107,7 @@ public class AddLocalExchanges
     }
 
     private class Rewriter
-            extends PlanVisitor<StreamPreferredProperties, PlanWithProperties>
+            extends PlanVisitor<PlanWithProperties, StreamPreferredProperties>
     {
         private final PlanNodeIdAllocator idAllocator;
         private final Session session;
@@ -124,6 +127,18 @@ public class AddLocalExchanges
                     node,
                     parentPreferences.withoutPreference().withDefaultParallelism(session),
                     parentPreferences.withDefaultParallelism(session));
+        }
+
+        @Override
+        public PlanWithProperties visitApply(ApplyNode node, StreamPreferredProperties parentPreferences)
+        {
+            throw new IllegalStateException("Unexpected node: " + node.getClass().getName());
+        }
+
+        @Override
+        public PlanWithProperties visitLateralJoin(LateralJoinNode node, StreamPreferredProperties parentPreferences)
+        {
+            throw new IllegalStateException("Unexpected node: " + node.getClass().getName());
         }
 
         @Override
@@ -169,7 +184,7 @@ public class AddLocalExchanges
         @Override
         public PlanWithProperties visitTopN(TopNNode node, StreamPreferredProperties parentPreferences)
         {
-            if (node.isPartial()) {
+            if (node.getStep().equals(TopNNode.Step.PARTIAL)) {
                 return planAndEnforceChildren(
                         node,
                         parentPreferences.withoutPreference().withDefaultParallelism(session),
@@ -432,10 +447,19 @@ public class AddLocalExchanges
         @Override
         public PlanWithProperties visitJoin(JoinNode node, StreamPreferredProperties parentPreferences)
         {
-            PlanWithProperties probe = planAndEnforce(
-                    node.getLeft(),
-                    defaultParallelism(session),
-                    parentPreferences.constrainTo(node.getLeft().getOutputSymbols()).withDefaultParallelism(session));
+            PlanWithProperties probe;
+            if (isSpillEnabled(session)) {
+                probe = planAndEnforce(
+                        node.getLeft(),
+                        fixedParallelism(),
+                        parentPreferences.constrainTo(node.getLeft().getOutputSymbols()).withFixedParallelism());
+            }
+            else {
+                probe = planAndEnforce(
+                        node.getLeft(),
+                        defaultParallelism(session),
+                        parentPreferences.constrainTo(node.getLeft().getOutputSymbols()).withDefaultParallelism(session));
+            }
 
             // this build consumes the input completely, so we do not pass through parent preferences
             List<Symbol> buildHashSymbols = Lists.transform(node.getCriteria(), JoinNode.EquiJoinClause::getRight);

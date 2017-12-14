@@ -50,7 +50,6 @@ import static java.lang.String.format;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.testng.Assert.assertTrue;
 
 public class PrestoLdapCliTests
         extends PrestoCliLauncher
@@ -91,11 +90,10 @@ public class PrestoLdapCliTests
     public Requirement getRequirements(Configuration configuration)
     {
         return compose(new LdapObjectRequirement(
-                Arrays.asList(
-                        AMERICA_ORG, ASIA_ORG,
-                        DEFAULT_GROUP, PARENT_GROUP, CHILD_GROUP,
-                        DEFAULT_GROUP_USER, PARENT_GROUP_USER, CHILD_GROUP_USER, ORPHAN_USER, SPECIAL_USER, USER_IN_MULTIPLE_GROUPS
-                )),
+                        Arrays.asList(
+                                AMERICA_ORG, ASIA_ORG,
+                                DEFAULT_GROUP, PARENT_GROUP, CHILD_GROUP,
+                                DEFAULT_GROUP_USER, PARENT_GROUP_USER, CHILD_GROUP_USER, ORPHAN_USER, SPECIAL_USER, USER_IN_MULTIPLE_GROUPS)),
                 immutableTable(NATION));
     }
 
@@ -145,7 +143,8 @@ public class PrestoLdapCliTests
     {
         ldapUserName = CHILD_GROUP_USER.getAttributes().get("cn");
         launchPrestoCliWithServerArgument("--catalog", "hive", "--schema", "default", "--execute", "select * from nation;");
-        assertTrue(trimLines(presto.readRemainingErrorLines()).stream().anyMatch(str -> str.contains("User " + ldapUserName + " not a member of the authorized group")));
+        assertThat(trimLines(presto.readRemainingErrorLines())).anySatisfy(line ->
+                assertThat(line).contains(format("User [%s] not a member of the authorized group", ldapUserName)));
     }
 
     @Test(groups = {LDAP, LDAP_CLI, PROFILE_SPECIFIC_TESTS}, timeOut = TIMEOUT)
@@ -154,7 +153,8 @@ public class PrestoLdapCliTests
     {
         ldapUserName = PARENT_GROUP_USER.getAttributes().get("cn");
         launchPrestoCliWithServerArgument("--catalog", "hive", "--schema", "default", "--execute", "select * from nation;");
-        assertTrue(trimLines(presto.readRemainingErrorLines()).stream().anyMatch(str -> str.contains("User " + ldapUserName + " not a member of the authorized group")));
+        assertThat(trimLines(presto.readRemainingErrorLines())).anySatisfy(line ->
+                assertThat(line).contains(format("User [%s] not a member of the authorized group", ldapUserName)));
     }
 
     @Test(groups = {LDAP, LDAP_CLI, PROFILE_SPECIFIC_TESTS}, timeOut = TIMEOUT)
@@ -163,7 +163,8 @@ public class PrestoLdapCliTests
     {
         ldapUserName = ORPHAN_USER.getAttributes().get("cn");
         launchPrestoCliWithServerArgument("--catalog", "hive", "--schema", "default", "--execute", "select * from nation;");
-        assertTrue(trimLines(presto.readRemainingErrorLines()).stream().anyMatch(str -> str.contains("User " + ldapUserName + " not a member of the authorized group")));
+        assertThat(trimLines(presto.readRemainingErrorLines())).anySatisfy(line ->
+                assertThat(line).contains(format("User [%s] not a member of the authorized group", ldapUserName)));
     }
 
     @Test(groups = {LDAP, LDAP_CLI, PROFILE_SPECIFIC_TESTS}, timeOut = TIMEOUT)
@@ -172,7 +173,8 @@ public class PrestoLdapCliTests
     {
         ldapUserPassword = "wrong_password";
         launchPrestoCliWithServerArgument("--execute", "select * from hive.default.nation;");
-        assertTrue(trimLines(presto.readRemainingErrorLines()).stream().anyMatch(str -> str.contains("Invalid credentials")));
+        assertThat(trimLines(presto.readRemainingErrorLines())).anySatisfy(line ->
+                assertThat(line).contains("Invalid credentials"));
     }
 
     @Test(groups = {LDAP, LDAP_CLI, PROFILE_SPECIFIC_TESTS}, timeOut = TIMEOUT)
@@ -181,7 +183,8 @@ public class PrestoLdapCliTests
     {
         ldapUserName = "invalid_user";
         launchPrestoCliWithServerArgument("--execute", "select * from hive.default.nation;");
-        assertTrue(trimLines(presto.readRemainingErrorLines()).stream().anyMatch(str -> str.contains("Invalid credentials")));
+        assertThat(trimLines(presto.readRemainingErrorLines())).anySatisfy(line ->
+                assertThat(line).contains("Invalid credentials"));
     }
 
     @Test(groups = {LDAP, LDAP_CLI, PROFILE_SPECIFIC_TESTS}, timeOut = TIMEOUT)
@@ -190,7 +193,8 @@ public class PrestoLdapCliTests
     {
         ldapUserName = "";
         launchPrestoCliWithServerArgument("--execute", "select * from hive.default.nation;");
-        assertTrue(trimLines(presto.readRemainingErrorLines()).stream().anyMatch(str -> str.contains("Malformed decoded credentials")));
+        assertThat(trimLines(presto.readRemainingErrorLines())).anySatisfy(line ->
+                assertThat(line).contains("Malformed decoded credentials"));
     }
 
     @Test(groups = {LDAP, LDAP_CLI, PROFILE_SPECIFIC_TESTS}, timeOut = TIMEOUT)
@@ -202,7 +206,8 @@ public class PrestoLdapCliTests
                 "--truststore-password", ldapTruststorePassword,
                 "--user", ldapUserName,
                 "--execute", "select * from hive.default.nation;");
-        assertTrue(trimLines(presto.readRemainingErrorLines()).stream().anyMatch(str -> str.contains("statusMessage=Unauthorized")));
+        assertThat(trimLines(presto.readRemainingErrorLines())).anySatisfy(line ->
+                assertThat(line).contains("Authentication failed: Unauthorized"));
     }
 
     @Test(groups = {LDAP, LDAP_CLI, PROFILE_SPECIFIC_TESTS}, timeOut = TIMEOUT)
@@ -211,7 +216,8 @@ public class PrestoLdapCliTests
     {
         ldapServerAddress = format("http://%s:8443", serverHost);
         launchPrestoCliWithServerArgument("--execute", "select * from hive.default.nation;");
-        assertTrue(trimLines(presto.readRemainingErrorLines()).stream().anyMatch(str -> str.contains("Authentication using username/password requires HTTPS to be enabled")));
+        assertThat(trimLines(presto.readRemainingErrorLines())).anySatisfy(line ->
+                assertThat(line).contains("Authentication using username/password requires HTTPS to be enabled"));
         skipAfterTestWithContext();
     }
 
@@ -221,7 +227,8 @@ public class PrestoLdapCliTests
     {
         ldapTruststorePassword = "wrong_password";
         launchPrestoCliWithServerArgument("--execute", "select * from hive.default.nation;");
-        assertTrue(trimLines(presto.readRemainingErrorLines()).stream().anyMatch(str -> str.contains("Keystore was tampered with, or password was incorrect")));
+        assertThat(trimLines(presto.readRemainingErrorLines())).anySatisfy(line ->
+                assertThat(line).contains("Keystore was tampered with, or password was incorrect"));
         skipAfterTestWithContext();
     }
 
@@ -247,7 +254,8 @@ public class PrestoLdapCliTests
     {
         ldapUserName = "UserWith:Colon";
         launchPrestoCliWithServerArgument("--execute", "select * from hive.default.nation;");
-        assertTrue(trimLines(presto.readRemainingErrorLines()).stream().anyMatch(str -> str.contains("Illegal character ':' found in username")));
+        assertThat(trimLines(presto.readRemainingErrorLines())).anySatisfy(line ->
+                assertThat(line).contains("Illegal character ':' found in username"));
         skipAfterTestWithContext();
     }
 

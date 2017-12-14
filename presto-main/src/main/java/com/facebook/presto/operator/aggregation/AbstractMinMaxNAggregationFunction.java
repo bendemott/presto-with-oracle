@@ -23,11 +23,10 @@ import com.facebook.presto.operator.aggregation.state.MinMaxNStateSerializer;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
-import com.facebook.presto.spi.block.BlockBuilderStatus;
+import com.facebook.presto.spi.type.ArrayType;
 import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
-import com.facebook.presto.type.ArrayType;
 import com.google.common.collect.ImmutableList;
 
 import java.lang.invoke.MethodHandle;
@@ -86,7 +85,7 @@ public abstract class AbstractMinMaxNAggregationFunction
         Type intermediateType = stateSerializer.getSerializedType();
         ArrayType outputType = new ArrayType(type);
 
-        List<ParameterMetadata> inputParameterMetadata =  ImmutableList.of(
+        List<ParameterMetadata> inputParameterMetadata = ImmutableList.of(
                 new ParameterMetadata(STATE),
                 new ParameterMetadata(BLOCK_INPUT_CHANNEL, type),
                 new ParameterMetadata(INPUT_CHANNEL, BIGINT),
@@ -104,7 +103,7 @@ public abstract class AbstractMinMaxNAggregationFunction
                 outputType);
 
         GenericAccumulatorFactoryBinder factory = AccumulatorCompiler.generateAccumulatorFactoryBinder(metadata, classLoader);
-        return new InternalAggregationFunction(getSignature().getName(), inputTypes, intermediateType, outputType, true, factory);
+        return new InternalAggregationFunction(getSignature().getName(), inputTypes, intermediateType, outputType, true, false, factory);
     }
 
     public static void input(BlockComparator comparator, Type type, MinMaxNState state, Block block, long n, int blockIndex)
@@ -148,7 +147,7 @@ public abstract class AbstractMinMaxNAggregationFunction
 
         Type elementType = outputType.getElementType();
 
-        BlockBuilder reversedBlockBuilder = elementType.createBlockBuilder(new BlockBuilderStatus(), heap.getCapacity());
+        BlockBuilder reversedBlockBuilder = elementType.createBlockBuilder(null, heap.getCapacity());
         long startSize = heap.getEstimatedSize();
         heap.popAll(reversedBlockBuilder);
         state.addMemoryUsage(heap.getEstimatedSize() - startSize);

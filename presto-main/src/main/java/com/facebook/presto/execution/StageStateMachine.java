@@ -214,6 +214,7 @@ public class StageStateMachine
         int totalDrivers = 0;
         int queuedDrivers = 0;
         int runningDrivers = 0;
+        int blockedDrivers = 0;
         int completedDrivers = 0;
 
         long cumulativeMemory = 0;
@@ -235,6 +236,8 @@ public class StageStateMachine
         long outputDataSize = 0;
         long outputPositions = 0;
 
+        long physicalWrittenDataSize = 0;
+
         boolean fullyBlocked = true;
         Set<BlockedReason> blockedReasons = new HashSet<>();
 
@@ -253,6 +256,7 @@ public class StageStateMachine
             totalDrivers += taskStats.getTotalDrivers();
             queuedDrivers += taskStats.getQueuedDrivers();
             runningDrivers += taskStats.getRunningDrivers();
+            blockedDrivers += taskStats.getBlockedDrivers();
             completedDrivers += taskStats.getCompletedDrivers();
 
             cumulativeMemory += taskStats.getCumulativeMemory();
@@ -277,6 +281,8 @@ public class StageStateMachine
             outputDataSize += taskStats.getOutputDataSize().toBytes();
             outputPositions += taskStats.getOutputPositions();
 
+            physicalWrittenDataSize += taskStats.getPhysicalWrittenDataSize().toBytes();
+
             for (PipelineStats pipeline : taskStats.getPipelines()) {
                 for (OperatorStats operatorStats : pipeline.getOperatorSummaries()) {
                     String id = pipeline.getPipelineId() + "." + operatorStats.getOperatorId();
@@ -298,6 +304,7 @@ public class StageStateMachine
                 totalDrivers,
                 queuedDrivers,
                 runningDrivers,
+                blockedDrivers,
                 completedDrivers,
 
                 cumulativeMemory,
@@ -317,6 +324,7 @@ public class StageStateMachine
                 succinctBytes(bufferedDataSize),
                 succinctBytes(outputDataSize),
                 outputPositions,
+                succinctBytes(physicalWrittenDataSize),
                 ImmutableList.copyOf(operatorToStats.values()));
 
         ExecutionFailureInfo failureInfo = null;

@@ -41,15 +41,17 @@ import com.facebook.presto.spi.eventlistener.QueryStatistics;
 import com.facebook.presto.spi.eventlistener.SplitCompletedEvent;
 import com.facebook.presto.spi.eventlistener.SplitFailureInfo;
 import com.facebook.presto.spi.eventlistener.SplitStatistics;
+import com.facebook.presto.spi.eventlistener.StageCpuDistribution;
 import com.facebook.presto.transaction.TransactionId;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import io.airlift.json.JsonCodec;
 import io.airlift.log.Logger;
 import io.airlift.node.NodeInfo;
+import io.airlift.stats.Distribution;
+import io.airlift.stats.Distribution.DistributionSnapshot;
 import org.joda.time.DateTime;
 
 import javax.annotation.Nullable;
@@ -99,6 +101,15 @@ public class QueryMonitor
 
     public void queryCreatedEvent(QueryInfo queryInfo)
     {
+        Optional<String> plan = Optional.empty();
+        try {
+            if (queryInfo.getPlan().isPresent()) {
+                plan = Optional.of(objectMapper.writeValueAsString(queryInfo.getPlan().get()));
+            }
+        }
+        catch (JsonProcessingException ignored) {
+        }
+
         eventListenerManager.queryCreated(
                 new QueryCreatedEvent(
                         queryInfo.getQueryStats().getCreateTime().toDate().toInstant(),
@@ -108,6 +119,7 @@ public class QueryMonitor
                                 queryInfo.getSession().getRemoteUserAddress(),
                                 queryInfo.getSession().getUserAgent(),
                                 queryInfo.getSession().getClientInfo(),
+                                queryInfo.getSession().getClientTags(),
                                 queryInfo.getSession().getSource(),
                                 queryInfo.getSession().getCatalog(),
                                 queryInfo.getSession().getSchema(),
@@ -122,6 +134,7 @@ public class QueryMonitor
                                 queryInfo.getQuery(),
                                 queryInfo.getState().toString(),
                                 queryInfo.getSelf(),
+                                plan,
                                 Optional.empty())));
     }
 
@@ -150,7 +163,7 @@ public class QueryMonitor
                         input.getSchema(),
                         input.getTable(),
                         input.getColumns().stream()
-                                .map(Column::toString).collect(Collectors.toList()),
+                                .map(Column::getName).collect(Collectors.toList()),
                         input.getConnectorInfo()));
             }
 
@@ -173,6 +186,16 @@ public class QueryMonitor
                                 tableFinishInfo.map(TableFinishInfo::isJsonLengthLimitExceeded)));
             }
 
+            ImmutableList.Builder<String> operatorSummaries = ImmutableList.builder();
+            for (OperatorStats summary : queryInfo.getQueryStats().getOperatorSummaries()) {
+                operatorSummaries.add(objectMapper.writeValueAsString(summary));
+            }
+
+            Optional<String> plan = Optional.empty();
+            if (queryInfo.getPlan().isPresent()) {
+                plan = Optional.of(objectMapper.writeValueAsString(queryInfo.getPlan().get()));
+            }
+
             eventListenerManager.queryCompleted(
                     new QueryCompletedEvent(
                             new QueryMetadata(
@@ -181,6 +204,7 @@ public class QueryMonitor
                                     queryInfo.getQuery(),
                                     queryInfo.getState().toString(),
                                     queryInfo.getSelf(),
+                                    plan,
                                     queryInfo.getOutputStage().flatMap(stage -> stageInfoCodec.toJsonWithLengthLimit(stage, toIntExact(config.getMaxOutputStageJsonSize().toBytes())))),
                             new QueryStatistics(
                                     ofMillis(queryStats.getTotalCpuTime().toMillis()),
@@ -191,15 +215,22 @@ public class QueryMonitor
                                     queryStats.getPeakMemoryReservation().toBytes(),
                                     queryStats.getRawInputDataSize().toBytes(),
                                     queryStats.getRawInputPositions(),
+                                    queryStats.getOutputDataSize().toBytes(),
+                                    queryStats.getOutputPositions(),
+                                    queryStats.getLogicalWrittenDataSize().toBytes(),
+                                    queryStats.getWrittenPositions(),
+                                    queryStats.getCumulativeMemory(),
                                     queryStats.getCompletedDrivers(),
                                     queryInfo.isCompleteInfo(),
-                                    objectMapper.writeValueAsString(queryInfo.getQueryStats().getOperatorSummaries())),
+                                    getCpuDistributions(queryInfo),
+                                    operatorSummaries.build()),
                             new QueryContext(
                                     queryInfo.getSession().getUser(),
                                     queryInfo.getSession().getPrincipal(),
                                     queryInfo.getSession().getRemoteUserAddress(),
                                     queryInfo.getSession().getUserAgent(),
                                     queryInfo.getSession().getClientInfo(),
+                                    queryInfo.getSession().getClientTags(),
                                     queryInfo.getSession().getSource(),
                                     queryInfo.getSession().getCatalog(),
                                     queryInfo.getSession().getSchema(),
@@ -217,7 +248,7 @@ public class QueryMonitor
             logQueryTimeline(queryInfo);
         }
         catch (JsonProcessingException e) {
-            throw Throwables.propagate(e);
+            throw new RuntimeException(e);
         }
     }
 
@@ -366,5 +397,50 @@ public class QueryMonitor
         catch (JsonProcessingException e) {
             log.error(e, "Error processing split completion event for task %s", taskId);
         }
+    }
+
+    private static List<StageCpuDistribution> getCpuDistributions(QueryInfo queryInfo)
+    {
+        if (!queryInfo.getOutputStage().isPresent()) {
+            return ImmutableList.of();
+        }
+
+        ImmutableList.Builder<StageCpuDistribution> builder = ImmutableList.builder();
+        populateDistribution(queryInfo.getOutputStage().get(), builder);
+
+        return builder.build();
+    }
+
+    private static void populateDistribution(StageInfo stageInfo, ImmutableList.Builder<StageCpuDistribution> distributions)
+    {
+        distributions.add(computeCpuDistribution(stageInfo));
+        for (StageInfo subStage : stageInfo.getSubStages()) {
+            populateDistribution(subStage, distributions);
+        }
+    }
+
+    private static StageCpuDistribution computeCpuDistribution(StageInfo stageInfo)
+    {
+        Distribution cpuDistribution = new Distribution();
+
+        for (TaskInfo taskInfo : stageInfo.getTasks()) {
+            cpuDistribution.add(taskInfo.getStats().getTotalCpuTime().toMillis());
+        }
+
+        DistributionSnapshot snapshot = cpuDistribution.snapshot();
+
+        return new StageCpuDistribution(
+                stageInfo.getStageId().getId(),
+                stageInfo.getTasks().size(),
+                snapshot.getP25(),
+                snapshot.getP50(),
+                snapshot.getP75(),
+                snapshot.getP90(),
+                snapshot.getP95(),
+                snapshot.getP99(),
+                snapshot.getMin(),
+                snapshot.getMax(),
+                (long) snapshot.getTotal(),
+                snapshot.getTotal() / snapshot.getCount());
     }
 }

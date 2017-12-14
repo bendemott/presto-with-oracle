@@ -15,9 +15,9 @@ package com.facebook.presto.plugin.postgresql;
 
 import com.facebook.presto.plugin.jdbc.BaseJdbcClient;
 import com.facebook.presto.plugin.jdbc.BaseJdbcConfig;
+import com.facebook.presto.plugin.jdbc.DriverConnectionFactory;
 import com.facebook.presto.plugin.jdbc.JdbcConnectorId;
 import com.facebook.presto.plugin.jdbc.JdbcOutputTableHandle;
-import com.google.common.base.Throwables;
 import org.postgresql.Driver;
 
 import javax.inject.Inject;
@@ -35,7 +35,7 @@ public class PostgreSqlClient
     public PostgreSqlClient(JdbcConnectorId connectorId, BaseJdbcConfig config)
             throws SQLException
     {
-        super(connectorId, config, "\"", new Driver());
+        super(connectorId, config, "\"", new DriverConnectionFactory(new Driver(), config));
     }
 
     @Override
@@ -52,7 +52,7 @@ public class PostgreSqlClient
             execute(connection, sql.toString());
         }
         catch (SQLException e) {
-            throw Throwables.propagate(e);
+            throw new RuntimeException(e);
         }
     }
 
@@ -76,6 +76,6 @@ public class PostgreSqlClient
                 connection.getCatalog(),
                 escapeNamePattern(schemaName, escape),
                 escapeNamePattern(tableName, escape),
-                new String[] {"TABLE", "VIEW", "MATERIALIZED VIEW"});
+                new String[] {"TABLE", "VIEW", "MATERIALIZED VIEW", "FOREIGN TABLE"});
     }
 }

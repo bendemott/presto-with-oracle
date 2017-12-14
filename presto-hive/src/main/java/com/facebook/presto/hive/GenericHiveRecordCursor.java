@@ -20,23 +20,26 @@ import com.facebook.presto.spi.type.DecimalType;
 import com.facebook.presto.spi.type.Decimals;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
-import com.google.common.base.Throwables;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
-import org.apache.hadoop.hive.common.type.HiveChar;
 import org.apache.hadoop.hive.common.type.HiveDecimal;
-import org.apache.hadoop.hive.common.type.HiveVarchar;
 import org.apache.hadoop.hive.serde2.Deserializer;
 import org.apache.hadoop.hive.serde2.SerDeException;
+import org.apache.hadoop.hive.serde2.io.HiveCharWritable;
+import org.apache.hadoop.hive.serde2.io.HiveVarcharWritable;
 import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector;
 import org.apache.hadoop.hive.serde2.objectinspector.PrimitiveObjectInspector;
 import org.apache.hadoop.hive.serde2.objectinspector.StructField;
 import org.apache.hadoop.hive.serde2.objectinspector.StructObjectInspector;
+import org.apache.hadoop.io.BinaryComparable;
+import org.apache.hadoop.io.BytesWritable;
+import org.apache.hadoop.io.Text;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.mapred.RecordReader;
 import org.joda.time.DateTimeZone;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.math.BigInteger;
 import java.sql.Date;
 import java.sql.Timestamp;
@@ -55,7 +58,7 @@ import static com.facebook.presto.hive.util.SerDeUtils.getBlockObject;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.Chars.isCharType;
-import static com.facebook.presto.spi.type.Chars.trimSpacesAndTruncateToLength;
+import static com.facebook.presto.spi.type.Chars.truncateToLengthAndTrimSpaces;
 import static com.facebook.presto.spi.type.DateType.DATE;
 import static com.facebook.presto.spi.type.Decimals.rescale;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
@@ -157,12 +160,6 @@ class GenericHiveRecordCursor<K, V extends Writable>
             structFields[i] = field;
             fieldInspectors[i] = field.getFieldObjectInspector();
         }
-    }
-
-    @Override
-    public long getTotalBytes()
-    {
-        return totalBytes;
     }
 
     @Override
@@ -359,32 +356,37 @@ class GenericHiveRecordCursor<K, V extends Writable>
             nulls[column] = true;
         }
         else {
-            Object fieldValue = ((PrimitiveObjectInspector) fieldInspectors[column]).getPrimitiveJavaObject(fieldData);
+            Object fieldValue = ((PrimitiveObjectInspector) fieldInspectors[column]).getPrimitiveWritableObject(fieldData);
             checkState(fieldValue != null, "fieldValue should not be null");
-            Slice value;
-            if (fieldValue instanceof String) {
-                value = Slices.utf8Slice((String) fieldValue);
+            BinaryComparable hiveValue;
+            if (fieldValue instanceof Text) {
+                hiveValue = (Text) fieldValue;
             }
-            else if (fieldValue instanceof byte[]) {
-                value = Slices.wrappedBuffer((byte[]) fieldValue);
+            else if (fieldValue instanceof BytesWritable) {
+                hiveValue = (BytesWritable) fieldValue;
             }
-            else if (fieldValue instanceof HiveVarchar) {
-                value = Slices.utf8Slice(((HiveVarchar) fieldValue).getValue());
+            else if (fieldValue instanceof HiveVarcharWritable) {
+                hiveValue = ((HiveVarcharWritable) fieldValue).getTextValue();
             }
-            else if (fieldValue instanceof HiveChar) {
-                value = Slices.utf8Slice(((HiveChar) fieldValue).getValue());
+            else if (fieldValue instanceof HiveCharWritable) {
+                hiveValue = ((HiveCharWritable) fieldValue).getTextValue();
             }
             else {
                 throw new IllegalStateException("unsupported string field type: " + fieldValue.getClass().getName());
             }
+
+            // create a slice view over the hive value and trim to character limits
+            Slice value = Slices.wrappedBuffer(hiveValue.getBytes(), 0, hiveValue.getLength());
             Type type = types[column];
             if (isVarcharType(type)) {
                 value = truncateToLength(value, type);
             }
             if (isCharType(type)) {
-                value = trimSpacesAndTruncateToLength(value, type);
+                value = truncateToLengthAndTrimSpaces(value, type);
             }
-            slices[column] = value;
+
+            // store a copy of the bytes, since the hive reader can reuse the underlying buffer
+            slices[column] = Slices.copyOf(value);
             nulls[column] = false;
         }
     }
@@ -524,7 +526,7 @@ class GenericHiveRecordCursor<K, V extends Writable>
             recordReader.close();
         }
         catch (IOException e) {
-            throw Throwables.propagate(e);
+            throw new UncheckedIOException(e);
         }
     }
 }

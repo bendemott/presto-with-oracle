@@ -13,19 +13,15 @@
  */
 package com.facebook.presto.type;
 
-import com.facebook.presto.Session;
-import com.facebook.presto.operator.scalar.FunctionAssertions;
+import com.facebook.presto.operator.scalar.AbstractTestFunctions;
 import com.facebook.presto.spi.type.SqlDate;
 import com.facebook.presto.spi.type.SqlTime;
 import com.facebook.presto.spi.type.SqlTimeWithTimeZone;
 import com.facebook.presto.spi.type.SqlTimestamp;
 import com.facebook.presto.spi.type.SqlTimestampWithTimeZone;
 import com.facebook.presto.spi.type.TimeZoneKey;
-import com.facebook.presto.spi.type.Type;
 import org.joda.time.DateTime;
 import org.joda.time.DateTimeZone;
-import org.testng.annotations.AfterClass;
-import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
 import java.util.concurrent.TimeUnit;
@@ -40,11 +36,12 @@ import static com.facebook.presto.spi.type.TimestampType.TIMESTAMP;
 import static com.facebook.presto.spi.type.TimestampWithTimeZoneType.TIMESTAMP_WITH_TIME_ZONE;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.testing.TestingSession.testSessionBuilder;
+import static com.facebook.presto.type.IntervalDayTimeType.INTERVAL_DAY_TIME;
 import static com.facebook.presto.util.DateTimeZoneIndex.getDateTimeZone;
-import static io.airlift.testing.Closeables.closeAllRuntimeException;
 import static org.joda.time.DateTimeZone.UTC;
 
 public class TestTimestamp
+        extends AbstractTestFunctions
 {
     private static final TimeZoneKey TIME_ZONE_KEY = getTimeZoneKey("Europe/Berlin");
     private static final DateTimeZone DATE_TIME_ZONE = getDateTimeZone(TIME_ZONE_KEY);
@@ -53,27 +50,24 @@ public class TestTimestamp
     private static final TimeZoneKey ORAL_TIME_ZONE_KEY = getTimeZoneKey("Asia/Oral");
     private static final DateTimeZone ORAL_ZONE = getDateTimeZone(ORAL_TIME_ZONE_KEY);
 
-    private FunctionAssertions functionAssertions;
-
-    @BeforeClass
-    public void setUp()
+    public TestTimestamp()
     {
-        Session session = testSessionBuilder()
+        super(testSessionBuilder()
                 .setTimeZoneKey(TIME_ZONE_KEY)
-                .build();
-        functionAssertions = new FunctionAssertions(session);
+                .build());
     }
 
-    @AfterClass(alwaysRun = true)
-    public void tearDown()
+    @Test
+    public void testSubstract()
+            throws Exception
     {
-        closeAllRuntimeException(functionAssertions);
-        functionAssertions = null;
-    }
+        functionAssertions.assertFunctionString("TIMESTAMP '2017-03-30 14:15:16.432' - TIMESTAMP '2016-03-29 03:04:05.321'",
+                INTERVAL_DAY_TIME,
+                "366 11:11:11.111");
 
-    private void assertFunction(String projection, Type expectedType, Object expected)
-    {
-        functionAssertions.assertFunction(projection, expectedType, expected);
+        functionAssertions.assertFunctionString("TIMESTAMP '2016-03-29 03:04:05.321' - TIMESTAMP '2017-03-30 14:15:16.432'",
+                INTERVAL_DAY_TIME,
+                "-366 11:11:11.111");
     }
 
     @Test

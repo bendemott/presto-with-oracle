@@ -43,6 +43,7 @@ public class TestStageStats
             7,
             8,
             10,
+            26,
             11,
 
             12.0,
@@ -65,6 +66,9 @@ public class TestStageStats
             new DataSize(23, BYTE),
             new DataSize(24, BYTE),
             25,
+
+            new DataSize(26, BYTE),
+
             ImmutableList.of());
 
     @Test
@@ -93,6 +97,7 @@ public class TestStageStats
         assertEquals(actual.getTotalDrivers(), 7);
         assertEquals(actual.getQueuedDrivers(), 8);
         assertEquals(actual.getRunningDrivers(), 10);
+        assertEquals(actual.getBlockedDrivers(), 26);
         assertEquals(actual.getCompletedDrivers(), 11);
 
         assertEquals(actual.getCumulativeMemory(), 12.0);
@@ -113,6 +118,8 @@ public class TestStageStats
         assertEquals(actual.getBufferedDataSize(), new DataSize(23, BYTE));
         assertEquals(actual.getOutputDataSize(), new DataSize(24, BYTE));
         assertEquals(actual.getOutputPositions(), 25);
+
+        assertEquals(actual.getPhysicalWrittenDataSize(), new DataSize(26, BYTE));
     }
 
     private static DistributionSnapshot getTestDistribution(int count)

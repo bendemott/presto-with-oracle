@@ -24,11 +24,13 @@ import com.facebook.presto.sql.gen.JoinCompiler.PagesHashStrategyFactory;
 import com.facebook.presto.type.TypeUtils;
 import com.google.common.collect.ImmutableList;
 import com.google.common.primitives.Ints;
+import org.openjdk.jol.info.ClassLayout;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalInt;
 
 import static com.facebook.presto.block.BlockAssertions.assertBlockEquals;
 import static com.facebook.presto.operator.PageAssertions.assertPageEquals;
@@ -67,14 +69,14 @@ public class TestJoinCompiler
                 BlockAssertions.createStringSequenceBlock(20, 30),
                 BlockAssertions.createStringSequenceBlock(15, 25));
 
-        Optional<Integer> hashChannel = Optional.empty();
+        OptionalInt hashChannel = OptionalInt.empty();
         List<List<Block>> channels = ImmutableList.of(channel);
         if (hashEnabled) {
             ImmutableList.Builder<Block> hashChannelBuilder = ImmutableList.builder();
             for (Block block : channel) {
                 hashChannelBuilder.add(TypeUtils.getHashBlock(joinTypes, block));
             }
-            hashChannel = Optional.of(1);
+            hashChannel = OptionalInt.of(1);
             channels = ImmutableList.of(channel, hashChannelBuilder.build());
         }
         PagesHashStrategy hashStrategy = pagesHashStrategyFactory.createPagesHashStrategy(channels, hashChannel);
@@ -169,7 +171,7 @@ public class TestJoinCompiler
                 BlockAssertions.createBooleanSequenceBlock(20, 30),
                 BlockAssertions.createBooleanSequenceBlock(15, 25));
 
-        Optional<Integer> hashChannel = Optional.empty();
+        OptionalInt hashChannel = OptionalInt.empty();
         ImmutableList<List<Block>> channels = ImmutableList.of(extraChannel, varcharChannel, longChannel, doubleChannel, booleanChannel, extraUnusedChannel);
         List<Block> precomputedHash = ImmutableList.of();
         if (hashEnabled) {
@@ -177,7 +179,7 @@ public class TestJoinCompiler
             for (int i = 0; i < 3; i++) {
                 hashChannelBuilder.add(TypeUtils.getHashBlock(joinTypes, varcharChannel.get(i), longChannel.get(i), doubleChannel.get(i), booleanChannel.get(i)));
             }
-            hashChannel = Optional.of(6);
+            hashChannel = OptionalInt.of(6);
             precomputedHash = hashChannelBuilder.build();
             channels = ImmutableList.of(extraChannel, varcharChannel, longChannel, doubleChannel, booleanChannel, extraUnusedChannel, precomputedHash);
             types = ImmutableList.of(VARCHAR, VARCHAR, BIGINT, DOUBLE, BOOLEAN, VARCHAR, BIGINT);
@@ -193,7 +195,8 @@ public class TestJoinCompiler
         // verify channel count
         assertEquals(hashStrategy.getChannelCount(), outputChannels.size());
         // verify size
-        long sizeInBytes = channels.stream()
+        int instanceSize = ClassLayout.parseClass(hashStrategy.getClass()).instanceSize();
+        long sizeInBytes = instanceSize + channels.stream()
                 .flatMap(List::stream)
                 .mapToLong(Block::getRetainedSizeInBytes)
                 .sum();

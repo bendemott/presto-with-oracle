@@ -17,8 +17,6 @@ import com.facebook.presto.orc.checkpoint.ByteArrayStreamCheckpoint;
 
 import java.io.IOException;
 
-import static com.facebook.presto.orc.stream.OrcStreamUtils.readFully;
-import static com.facebook.presto.orc.stream.OrcStreamUtils.skipFully;
 import static java.util.Objects.requireNonNull;
 
 public class ByteArrayInputStream
@@ -35,14 +33,14 @@ public class ByteArrayInputStream
             throws IOException
     {
         byte[] data = new byte[length];
-        readFully(inputStream, data, 0, length);
+        next(data, 0, length);
         return data;
     }
 
-    public void next(int length, byte[] data)
+    public void next(byte[] data, int offset, int length)
             throws IOException
     {
-        readFully(inputStream, data, 0, length);
+        inputStream.readFully(data, offset, length);
     }
 
     @Override
@@ -62,6 +60,6 @@ public class ByteArrayInputStream
     public void skip(long skipSize)
             throws IOException
     {
-        skipFully(inputStream, skipSize);
+        inputStream.skipFully(skipSize);
     }
 }

@@ -20,6 +20,8 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Optional;
 
+import static com.google.common.collect.ImmutableList.toImmutableList;
+
 public final class ExpressionTreeRewriter<C>
 {
     private final ExpressionRewriter<C> rewriter;
@@ -544,7 +546,7 @@ public final class ExpressionTreeRewriter<C>
 
             if (!sameElements(node.getArguments(), arguments.build()) || !sameElements(rewrittenWindow, node.getWindow())
                     || !sameElements(filter, node.getFilter())) {
-                return new FunctionCall(node.getName(), rewrittenWindow, filter, node.isDistinct(), arguments.build());
+                return new FunctionCall(node.getName(), rewrittenWindow, filter, node.getOrderBy().map(orderBy -> rewriteOrderBy(orderBy, context)), node.isDistinct(), arguments.build());
             }
             return node;
         }
@@ -552,22 +554,27 @@ public final class ExpressionTreeRewriter<C>
         // Since OrderBy contains list of SortItems, we want to process each SortItem's key, which is an expression
         private OrderBy rewriteOrderBy(OrderBy orderBy, Context<C> context)
         {
-            ImmutableList.Builder<SortItem> sortItems = ImmutableList.builder();
-            for (SortItem sortItem : orderBy.getSortItems()) {
-                Expression sortKey = rewrite(sortItem.getSortKey(), context.get());
-                if (sortItem.getSortKey() != sortKey) {
-                    sortItems.add(new SortItem(sortKey, sortItem.getOrdering(), sortItem.getNullOrdering()));
-                }
-                else {
-                    sortItems.add(sortItem);
-                }
-            }
-            List<SortItem> rewrittenSortItems = sortItems.build();
+            List<SortItem> rewrittenSortItems = rewriteSortItems(orderBy.getSortItems(), context);
             if (sameElements(orderBy.getSortItems(), rewrittenSortItems)) {
                 return orderBy;
             }
 
             return new OrderBy(rewrittenSortItems);
+        }
+
+        private List<SortItem> rewriteSortItems(List<SortItem> sortItems, Context<C> context)
+        {
+            ImmutableList.Builder<SortItem> rewrittenSortItems = ImmutableList.builder();
+            for (SortItem sortItem : sortItems) {
+                Expression sortKey = rewrite(sortItem.getSortKey(), context.get());
+                if (sortItem.getSortKey() != sortKey) {
+                    rewrittenSortItems.add(new SortItem(sortKey, sortItem.getOrdering(), sortItem.getNullOrdering()));
+                }
+                else {
+                    rewrittenSortItems.add(sortItem);
+                }
+            }
+            return rewrittenSortItems.build();
         }
 
         @Override
@@ -598,13 +605,14 @@ public final class ExpressionTreeRewriter<C>
                 }
             }
 
-            Expression value = rewrite(node.getValue(), context.get());
+            List<Expression> values = node.getValues().stream()
+                    .map(value -> rewrite(value, context.get()))
+                    .collect(toImmutableList());
             Expression function = rewrite(node.getFunction(), context.get());
 
-            if ((value != node.getValue()) || (function != node.getFunction())) {
-                return new BindExpression(value, function);
+            if (!sameElements(values, node.getValues()) || (function != node.getFunction())) {
+                return new BindExpression(values, function);
             }
-
             return node;
         }
 
@@ -753,7 +761,7 @@ public final class ExpressionTreeRewriter<C>
 
             Expression base = rewrite(node.getBase(), context.get());
             if (base != node.getBase()) {
-                return new DereferenceExpression(base, node.getFieldName());
+                return new DereferenceExpression(base, node.getField());
             }
 
             return node;
@@ -851,6 +859,19 @@ public final class ExpressionTreeRewriter<C>
 
             if (node.getValue() != value || node.getSubquery() != subquery) {
                 return new QuantifiedComparisonExpression(node.getComparisonType(), node.getQuantifier(), value, subquery);
+            }
+
+            return node;
+        }
+
+        @Override
+        public Expression visitGroupingOperation(GroupingOperation node, Context<C> context)
+        {
+            if (!context.isDefaultRewrite()) {
+                Expression result = rewriter.rewriteGroupingOperation(node, context.get(), ExpressionTreeRewriter.this);
+                if (result != null) {
+                    return result;
+                }
             }
 
             return node;

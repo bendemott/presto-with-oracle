@@ -108,6 +108,17 @@ pre {
     padding-bottom: 7px;
 }
 
+.dropdown-menu > li > .selected {
+    font-weight: 500;
+    color: #fff;
+    background-color: #6d6d6d;
+}
+
+.dropdown-menu > li > .selected:hover {
+    color: #fff;
+    background-color: #7b7b7b;
+}
+
 /** Convenience classes */
 /** =================== */
 
@@ -119,9 +130,17 @@ pre {
     color: #fff;
 }
 
+.font-light {
+    color: #d6f3fb;
+}
+
 .italic-uppercase {
     text-transform: uppercase;
     font-style: italic;
+}
+
+.uppercase {
+    text-transform: uppercase;
 }
 
 .h2-hr {
@@ -132,6 +151,10 @@ pre {
 .h3-hr {
     margin: 0;
     border-top-color: #dedede;
+}
+
+.h4-hr {
+    margin: 0 0 10px 0;
 }
 
 .wrap-text {
@@ -166,7 +189,6 @@ pre {
     padding: 15px;
     position: relative;
     color: #666;
-    text-transform: uppercase;
     font-size: 11px;
 }
 
@@ -194,11 +216,6 @@ pre {
     border-color: #137698;
 }
 
-.query-links {
-    float: right;
-    margin-top: 20px;
-}
-
 .progress-large {
     margin: 0;
     background-color: #808286;
@@ -220,6 +237,32 @@ pre {
 
 .copy-button:hover {
     color: #fff;
+}
+
+.status-light {
+    border-radius: 50%;
+    text-shadow: 0 0 3px #c3b300;
+    color: #c3b300;
+    font-size: 16px;
+}
+
+.status-light-red {
+    color: #ff0100;
+    text-shadow: 0 0 3px #ff0100;
+}
+
+.status-light-green {
+    color: #1cff00;
+    text-shadow: 0 0 3px #1cff00;
+}
+
+.status-light:before {
+    content: '\25CF';
+}
+
+.header-inline-links {
+    float: right;
+    margin-top: 20px;
 }
 
 /** ===================== **/
@@ -721,4 +764,36 @@ g .operator-stats:hover {
 .edge-class {
     stroke-width: 5px;
     fill: #fff;
+}
+
+/** ============== **/
+/**   Worker Page  **/
+/** ============== **/
+
+.query-memory-list-item {
+    border-bottom: 1px solid #383838;
+}
+
+.query-memory-list-header {
+    font-size: 13px;
+}
+
+.pool-memory {
+    background-color: #015b75;
+    padding: 4px;
+    font-size: 75%;
+    width: 100%;
+}
+
+.memory-progress-bar {
+    padding: 4px 0 0;
+    min-width: 0;
+}
+
+.memory-progress-bar-info {
+    background-color: #4d4d4d;
+}
+
+.stack-traces {
+    font-size: 11px;
 }

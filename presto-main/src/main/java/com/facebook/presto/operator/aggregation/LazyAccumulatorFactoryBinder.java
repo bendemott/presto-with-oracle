@@ -14,6 +14,10 @@
 package com.facebook.presto.operator.aggregation;
 
 import com.facebook.presto.bytecode.DynamicClassLoader;
+import com.facebook.presto.operator.PagesIndex;
+import com.facebook.presto.spi.block.SortOrder;
+import com.facebook.presto.spi.type.Type;
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Supplier;
 import com.google.common.base.Suppliers;
 
@@ -30,9 +34,15 @@ public class LazyAccumulatorFactoryBinder
         binder = Suppliers.memoize(() -> AccumulatorCompiler.generateAccumulatorFactoryBinder(metadata, classLoader));
     }
 
-    @Override
-    public AccumulatorFactory bind(List<Integer> argumentChannels, Optional<Integer> maskChannel)
+    @VisibleForTesting
+    public GenericAccumulatorFactoryBinder getGenericAccumulatorFactoryBinder()
     {
-        return binder.get().bind(argumentChannels, maskChannel);
+        return (GenericAccumulatorFactoryBinder) binder.get();
+    }
+
+    @Override
+    public AccumulatorFactory bind(List<Integer> argumentChannels, Optional<Integer> maskChannel, List<Type> sourceTypes, List<Integer> orderByChannels, List<SortOrder> orderings, PagesIndex.Factory pagesIndexFactory)
+    {
+        return binder.get().bind(argumentChannels, maskChannel, sourceTypes, orderByChannels, orderings, pagesIndexFactory);
     }
 }

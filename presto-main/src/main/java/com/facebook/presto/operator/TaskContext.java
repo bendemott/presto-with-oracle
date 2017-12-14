@@ -14,16 +14,18 @@
 package com.facebook.presto.operator;
 
 import com.facebook.presto.Session;
-import com.facebook.presto.execution.StateMachine.StateChangeListener;
+import com.facebook.presto.execution.Lifespan;
 import com.facebook.presto.execution.TaskId;
 import com.facebook.presto.execution.TaskState;
 import com.facebook.presto.execution.TaskStateMachine;
 import com.facebook.presto.memory.QueryContext;
+import com.facebook.presto.memory.QueryContextVisitor;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.util.concurrent.AtomicDouble;
 import com.google.common.util.concurrent.ListenableFuture;
 import io.airlift.stats.CounterStat;
+import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
 import org.joda.time.DateTime;
 
@@ -31,29 +33,36 @@ import javax.annotation.concurrent.GuardedBy;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.Iterables.transform;
+import static com.google.common.collect.Sets.newConcurrentHashSet;
+import static io.airlift.units.DataSize.Unit.BYTE;
 import static io.airlift.units.DataSize.succinctBytes;
 import static java.lang.Math.max;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
+import static java.util.stream.Collectors.toList;
 
 @ThreadSafe
 public class TaskContext
 {
     private final QueryContext queryContext;
     private final TaskStateMachine taskStateMachine;
-    private final Executor executor;
+    private final Executor notificationExecutor;
+    private final ScheduledExecutorService yieldExecutor;
     private final Session session;
 
     private final AtomicLong memoryReservation = new AtomicLong();
     private final AtomicLong systemMemoryReservation = new AtomicLong();
+    private final AtomicLong revocableMemoryReservation = new AtomicLong();
 
     private final long createNanos = System.nanoTime();
 
@@ -63,6 +72,8 @@ public class TaskContext
     private final AtomicReference<DateTime> executionStartTime = new AtomicReference<>();
     private final AtomicReference<DateTime> lastExecutionStartTime = new AtomicReference<>();
     private final AtomicReference<DateTime> executionEndTime = new AtomicReference<>();
+
+    private final Set<Lifespan> completedDriverGroups = newConcurrentHashSet();
 
     private final List<PipelineContext> pipelineContexts = new CopyOnWriteArrayList<>();
 
@@ -78,31 +89,49 @@ public class TaskContext
     @GuardedBy("cumulativeMemoryLock")
     private long lastTaskStatCallNanos = 0;
 
-    public TaskContext(QueryContext queryContext,
+    public static TaskContext createTaskContext(
+            QueryContext queryContext,
             TaskStateMachine taskStateMachine,
-            Executor executor,
+            Executor notificationExecutor,
+            ScheduledExecutorService yieldExecutor,
+            Session session,
+            boolean verboseStats,
+            boolean cpuTimerEnabled)
+    {
+        TaskContext taskContext = new TaskContext(queryContext, taskStateMachine, notificationExecutor, yieldExecutor, session, verboseStats, cpuTimerEnabled);
+        taskContext.initialize();
+        return taskContext;
+    }
+
+    private TaskContext(
+            QueryContext queryContext,
+            TaskStateMachine taskStateMachine,
+            Executor notificationExecutor,
+            ScheduledExecutorService yieldExecutor,
             Session session,
             boolean verboseStats,
             boolean cpuTimerEnabled)
     {
         this.taskStateMachine = requireNonNull(taskStateMachine, "taskStateMachine is null");
         this.queryContext = requireNonNull(queryContext, "queryContext is null");
-        this.executor = requireNonNull(executor, "executor is null");
+        this.notificationExecutor = requireNonNull(notificationExecutor, "notificationExecutor is null");
+        this.yieldExecutor = requireNonNull(yieldExecutor, "yieldExecutor is null");
         this.session = session;
-        taskStateMachine.addStateChangeListener(new StateChangeListener<TaskState>()
-        {
-            @Override
-            public void stateChanged(TaskState newState)
-            {
-                if (newState.isDone()) {
-                    executionEndTime.set(DateTime.now());
-                    endNanos.set(System.nanoTime());
-                }
-            }
-        });
-
         this.verboseStats = verboseStats;
         this.cpuTimerEnabled = cpuTimerEnabled;
+    }
+
+    // the state change listener is added here in a separate initialize() method
+    // instead of the constructor to prevent leaking the "this" reference to
+    // another thread, which will cause unsafe publication of this instance.
+    private void initialize()
+    {
+        taskStateMachine.addStateChangeListener(newState -> {
+            if (newState.isDone()) {
+                executionEndTime.set(DateTime.now());
+                endNanos.set(System.nanoTime());
+            }
+        });
     }
 
     public TaskId getTaskId()
@@ -112,7 +141,7 @@ public class TaskContext
 
     public PipelineContext addPipelineContext(int pipelineId, boolean inputPipeline, boolean outputPipeline)
     {
-        PipelineContext pipelineContext = new PipelineContext(pipelineId, this, executor, inputPipeline, outputPipeline);
+        PipelineContext pipelineContext = new PipelineContext(pipelineId, this, notificationExecutor, yieldExecutor, inputPipeline, outputPipeline);
         pipelineContexts.add(pipelineContext);
         return pipelineContext;
     }
@@ -147,12 +176,47 @@ public class TaskContext
         return taskStateMachine.getState();
     }
 
+    public DataSize getMemoryReservation()
+    {
+        return new DataSize(memoryReservation.get(), BYTE);
+    }
+
+    /**
+     * Returns the completed driver groups (excluding taskWide).
+     * A driver group is considered complete if all drivers associated with it
+     * has completed, and no new drivers associated with it will be created.
+     */
+    public Set<Lifespan> getCompletedDriverGroups()
+    {
+        return completedDriverGroups;
+    }
+
+    public void addCompletedDriverGroup(Lifespan driverGroup)
+    {
+        checkArgument(!driverGroup.isTaskWide(), "driverGroup is task-wide, not a driver group.");
+        completedDriverGroups.add(driverGroup);
+    }
+
+    public List<PipelineContext> getPipelineContexts()
+    {
+        return pipelineContexts;
+    }
+
     public synchronized ListenableFuture<?> reserveMemory(long bytes)
     {
         checkArgument(bytes >= 0, "bytes is negative");
 
         ListenableFuture<?> future = queryContext.reserveMemory(bytes);
         memoryReservation.getAndAdd(bytes);
+        return future;
+    }
+
+    public synchronized ListenableFuture<?> reserveRevocableMemory(long bytes)
+    {
+        checkArgument(bytes >= 0, "bytes is negative");
+
+        ListenableFuture<?> future = queryContext.reserveRevocableMemory(bytes);
+        revocableMemoryReservation.getAndAdd(bytes);
         return future;
     }
 
@@ -189,10 +253,18 @@ public class TaskContext
         queryContext.freeMemory(bytes);
     }
 
+    public synchronized void freeRevocableMemory(long bytes)
+    {
+        checkArgument(bytes >= 0, "bytes is negative");
+        checkArgument(bytes <= revocableMemoryReservation.get(), "tried to free more revocable memory than is reserved");
+        revocableMemoryReservation.getAndAdd(-bytes);
+        queryContext.freeRevocableMemory(bytes);
+    }
+
     public synchronized void freeSystemMemory(long bytes)
     {
         checkArgument(bytes >= 0, "bytes is negative");
-        checkArgument(bytes <= systemMemoryReservation.get(), "tried to free more memory than is reserved");
+        checkArgument(bytes <= systemMemoryReservation.get(), "tried to free more system memory than is reserved");
         systemMemoryReservation.getAndAdd(-bytes);
         queryContext.freeSystemMemory(bytes);
     }
@@ -282,6 +354,7 @@ public class TaskContext
         int queuedPartitionedDrivers = 0;
         int runningDrivers = 0;
         int runningPartitionedDrivers = 0;
+        int blockedDrivers = 0;
         int completedDrivers = 0;
 
         long totalScheduledTime = 0;
@@ -298,6 +371,8 @@ public class TaskContext
         long outputDataSize = 0;
         long outputPositions = 0;
 
+        long physicalWrittenDataSize = 0;
+
         for (PipelineStats pipeline : pipelineStats) {
             if (pipeline.getLastEndTime() != null) {
                 lastExecutionEndTime = max(pipeline.getLastEndTime().getMillis(), lastExecutionEndTime);
@@ -308,6 +383,7 @@ public class TaskContext
             queuedPartitionedDrivers += pipeline.getQueuedPartitionedDrivers();
             runningDrivers += pipeline.getRunningDrivers();
             runningPartitionedDrivers += pipeline.getRunningPartitionedDrivers();
+            blockedDrivers += pipeline.getBlockedDrivers();
             completedDrivers += pipeline.getCompletedDrivers();
 
             totalScheduledTime += pipeline.getTotalScheduledTime().roundTo(NANOSECONDS);
@@ -327,6 +403,8 @@ public class TaskContext
                 outputDataSize += pipeline.getOutputDataSize().toBytes();
                 outputPositions += pipeline.getOutputPositions();
             }
+
+            physicalWrittenDataSize += pipeline.getPhysicalWrittenDataSize().toBytes();
         }
 
         long startNanos = this.startNanos.get();
@@ -354,13 +432,15 @@ public class TaskContext
             lastMemoryReservation = currentMemory;
         }
 
-        boolean fullyBlocked = pipelineStats.stream()
-                .filter(pipeline -> pipeline.getRunningDrivers() > 0 || pipeline.getRunningPartitionedDrivers() > 0)
-                .allMatch(PipelineStats::isFullyBlocked);
-        ImmutableSet<BlockedReason> blockedReasons = pipelineStats.stream()
-                .filter(pipeline -> pipeline.getRunningDrivers() > 0 || pipeline.getRunningPartitionedDrivers() > 0)
+        Set<PipelineStats> runningPipelineStats = pipelineStats.stream()
+                .filter(pipeline -> pipeline.getRunningDrivers() > 0 || pipeline.getRunningPartitionedDrivers() > 0 || pipeline.getBlockedDrivers() > 0)
+                .collect(toImmutableSet());
+        ImmutableSet<BlockedReason> blockedReasons = runningPipelineStats.stream()
                 .flatMap(pipeline -> pipeline.getBlockedReasons().stream())
                 .collect(toImmutableSet());
+
+        boolean fullyBlocked = !runningPipelineStats.isEmpty() && runningPipelineStats.stream().allMatch(PipelineStats::isFullyBlocked);
+
         return new TaskStats(
                 taskStateMachine.getCreatedTime(),
                 executionStartTime.get(),
@@ -374,9 +454,11 @@ public class TaskContext
                 queuedPartitionedDrivers,
                 runningDrivers,
                 runningPartitionedDrivers,
+                blockedDrivers,
                 completedDrivers,
                 cumulativeMemory.get(),
                 succinctBytes(memoryReservation.get()),
+                succinctBytes(revocableMemoryReservation.get()),
                 succinctBytes(systemMemoryReservation.get()),
                 new Duration(totalScheduledTime, NANOSECONDS).convertToMostSuccinctTimeUnit(),
                 new Duration(totalCpuTime, NANOSECONDS).convertToMostSuccinctTimeUnit(),
@@ -390,6 +472,19 @@ public class TaskContext
                 processedInputPositions,
                 succinctBytes(outputDataSize),
                 outputPositions,
+                succinctBytes(physicalWrittenDataSize),
                 pipelineStats);
+    }
+
+    public <C, R> R accept(QueryContextVisitor<C, R> visitor, C context)
+    {
+        return visitor.visitTaskContext(this, context);
+    }
+
+    public <C, R> List<R> acceptChildren(QueryContextVisitor<C, R> visitor, C context)
+    {
+        return pipelineContexts.stream()
+                .map(pipelineContext -> pipelineContext.accept(visitor, context))
+                .collect(toList());
     }
 }

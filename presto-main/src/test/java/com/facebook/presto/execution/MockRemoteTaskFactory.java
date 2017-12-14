@@ -33,12 +33,12 @@ import com.facebook.presto.sql.planner.Partitioning;
 import com.facebook.presto.sql.planner.PartitioningScheme;
 import com.facebook.presto.sql.planner.PlanFragment;
 import com.facebook.presto.sql.planner.Symbol;
-import com.facebook.presto.sql.planner.TestingColumnHandle;
-import com.facebook.presto.sql.planner.TestingTableHandle;
 import com.facebook.presto.sql.planner.plan.PlanFragmentId;
 import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.sql.planner.plan.TableScanNode;
+import com.facebook.presto.testing.TestingMetadata.TestingColumnHandle;
+import com.facebook.presto.testing.TestingMetadata.TestingTableHandle;
 import com.google.common.collect.HashMultimap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -63,6 +63,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Stream;
 
@@ -70,6 +71,7 @@ import static com.facebook.presto.OutputBuffers.BufferType.BROADCAST;
 import static com.facebook.presto.OutputBuffers.createInitialEmptyOutputBuffers;
 import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
 import static com.facebook.presto.execution.StateMachine.StateChangeListener;
+import static com.facebook.presto.operator.PipelineExecutionStrategy.UNGROUPED_EXECUTION;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.sql.planner.SystemPartitioningHandle.SINGLE_DISTRIBUTION;
 import static com.facebook.presto.sql.planner.SystemPartitioningHandle.SOURCE_DISTRIBUTION;
@@ -85,10 +87,12 @@ public class MockRemoteTaskFactory
 {
     private static final String TASK_INSTANCE_ID = "task-instance-id";
     private final Executor executor;
+    private final ScheduledExecutorService scheduledExecutor;
 
-    public MockRemoteTaskFactory(Executor executor)
+    public MockRemoteTaskFactory(Executor executor, ScheduledExecutorService scheduledExecutor)
     {
         this.executor = executor;
+        this.scheduledExecutor = scheduledExecutor;
     }
 
     public MockRemoteTask createTableScanTask(TaskId taskId, Node newNode, List<Split> splits, PartitionedSplitCountTracker partitionedSplitCountTracker)
@@ -108,7 +112,8 @@ public class MockRemoteTaskFactory
                 ImmutableMap.of(symbol, VARCHAR),
                 SOURCE_DISTRIBUTION,
                 ImmutableList.of(sourceId),
-                new PartitioningScheme(Partitioning.create(SINGLE_DISTRIBUTION, ImmutableList.of()), ImmutableList.of(symbol)));
+                new PartitioningScheme(Partitioning.create(SINGLE_DISTRIBUTION, ImmutableList.of()), ImmutableList.of(symbol)),
+                UNGROUPED_EXECUTION);
 
         ImmutableMultimap.Builder<PlanNodeId, Split> initialSplits = ImmutableMultimap.builder();
         for (Split sourceSplit : splits) {
@@ -128,7 +133,7 @@ public class MockRemoteTaskFactory
             PartitionedSplitCountTracker partitionedSplitCountTracker,
             boolean summarizeTaskInfo)
     {
-        return new MockRemoteTask(taskId, fragment, node.getNodeIdentifier(), executor, initialSplits, partitionedSplitCountTracker);
+        return new MockRemoteTask(taskId, fragment, node.getNodeIdentifier(), executor, scheduledExecutor, initialSplits, partitionedSplitCountTracker);
     }
 
     public static final class MockRemoteTask
@@ -162,6 +167,7 @@ public class MockRemoteTaskFactory
                 PlanFragment fragment,
                 String nodeId,
                 Executor executor,
+                ScheduledExecutorService scheduledExecutor,
                 Multimap<PlanNodeId, Split> initialSplits,
                 PartitionedSplitCountTracker partitionedSplitCountTracker)
         {
@@ -170,7 +176,7 @@ public class MockRemoteTaskFactory
             MemoryPool memoryPool = new MemoryPool(new MemoryPoolId("test"), new DataSize(1, GIGABYTE));
             MemoryPool memorySystemPool = new MemoryPool(new MemoryPoolId("testSystem"), new DataSize(1, GIGABYTE));
             SpillSpaceTracker spillSpaceTracker = new SpillSpaceTracker(new DataSize(1, GIGABYTE));
-            QueryContext queryContext = new QueryContext(taskId.getQueryId(), new DataSize(1, MEGABYTE), memoryPool, memorySystemPool, executor, new DataSize(1, MEGABYTE), spillSpaceTracker);
+            QueryContext queryContext = new QueryContext(taskId.getQueryId(), new DataSize(1, MEGABYTE), memoryPool, memorySystemPool, executor, scheduledExecutor, new DataSize(1, MEGABYTE), spillSpaceTracker);
             this.taskContext = queryContext.addTaskContext(taskStateMachine, TEST_SESSION, true, true);
 
             this.location = URI.create("fake://task/" + taskId);
@@ -211,7 +217,21 @@ public class MockRemoteTaskFactory
                 failures = toFailures(taskStateMachine.getFailureCauses());
             }
 
-            return new TaskInfo(new TaskStatus(taskStateMachine.getTaskId(), TASK_INSTANCE_ID, nextTaskInfoVersion.getAndIncrement(), state, location, failures, 0, 0, new DataSize(0, BYTE)),
+            return new TaskInfo(
+                    new TaskStatus(
+                            taskStateMachine.getTaskId(),
+                            TASK_INSTANCE_ID,
+                            nextTaskInfoVersion.getAndIncrement(),
+                            state,
+                            location,
+                            nodeId,
+                            ImmutableSet.of(),
+                            failures,
+                            0,
+                            0,
+                            false,
+                            new DataSize(0, BYTE),
+                            new DataSize(0, BYTE)),
                     DateTime.now(),
                     outputBuffer.getInfo(),
                     ImmutableSet.of(),
@@ -229,9 +249,13 @@ public class MockRemoteTaskFactory
                     nextTaskInfoVersion.get(),
                     taskStateMachine.getState(),
                     location,
+                    nodeId,
+                    ImmutableSet.of(),
                     ImmutableList.of(),
                     stats.getQueuedPartitionedDrivers(),
                     stats.getRunningPartitionedDrivers(),
+                    false,
+                    stats.getPhysicalWrittenDataSize(),
                     stats.getMemoryReservation());
         }
 
@@ -310,6 +334,12 @@ public class MockRemoteTaskFactory
             if (allSourcesComplete) {
                 taskStateMachine.finished();
             }
+        }
+
+        @Override
+        public void noMoreSplits(PlanNodeId sourceId, Lifespan lifespan)
+        {
+            throw new UnsupportedOperationException();
         }
 
         @Override

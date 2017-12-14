@@ -13,40 +13,52 @@
  */
 package com.facebook.presto.operator.scalar;
 
+import com.facebook.presto.spi.ConnectorSession;
 import com.google.common.collect.ImmutableList;
 
 import java.lang.invoke.MethodHandle;
-import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 
+import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentType.FUNCTION_TYPE;
+import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentType.VALUE_TYPE;
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkState;
+import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 
 public final class ScalarFunctionImplementation
 {
     private final boolean nullable;
-    private final List<Boolean> nullableArguments;
-    private final List<Boolean> nullFlags;
+    private final List<ArgumentProperty> argumentProperties;
     private final MethodHandle methodHandle;
     private final Optional<MethodHandle> instanceFactory;
     private final boolean deterministic;
 
-    public ScalarFunctionImplementation(boolean nullable, List<Boolean> nullableArguments, MethodHandle methodHandle, boolean deterministic)
+    public ScalarFunctionImplementation(
+            boolean nullable,
+            List<ArgumentProperty> argumentProperties,
+            MethodHandle methodHandle,
+            boolean deterministic)
     {
-        this(nullable, nullableArguments, Collections.nCopies(nullableArguments.size(), false), methodHandle, Optional.empty(), deterministic);
+        this(
+                nullable,
+                argumentProperties,
+                methodHandle,
+                Optional.empty(),
+                deterministic);
     }
 
-    public ScalarFunctionImplementation(boolean nullable, List<Boolean> nullableArguments, List<Boolean> nullFlags, MethodHandle methodHandle, boolean deterministic)
-    {
-        this(nullable, nullableArguments, nullFlags, methodHandle, Optional.empty(), deterministic);
-    }
-
-    public ScalarFunctionImplementation(boolean nullable, List<Boolean> nullableArguments, List<Boolean> nullFlags, MethodHandle methodHandle, Optional<MethodHandle> instanceFactory, boolean deterministic)
+    public ScalarFunctionImplementation(
+            boolean nullable,
+            List<ArgumentProperty> argumentProperties,
+            MethodHandle methodHandle,
+            Optional<MethodHandle> instanceFactory,
+            boolean deterministic)
     {
         this.nullable = nullable;
-        this.nullableArguments = ImmutableList.copyOf(requireNonNull(nullableArguments, "nullableArguments is null"));
-        this.nullFlags = ImmutableList.copyOf(requireNonNull(nullFlags, "nullFlags is null"));
+        this.argumentProperties = ImmutableList.copyOf(requireNonNull(argumentProperties, "argumentProperties is null"));
         this.methodHandle = requireNonNull(methodHandle, "methodHandle is null");
         this.instanceFactory = requireNonNull(instanceFactory, "instanceFactory is null");
         this.deterministic = deterministic;
@@ -56,10 +68,14 @@ public final class ScalarFunctionImplementation
             checkArgument(instanceType.equals(methodHandle.type().parameterType(0)), "methodHandle is not an instance method");
         }
 
-        // check if nullableArguments and nullFlags match
-        for (int i = 0; i < nullFlags.size(); i++) {
-            if (nullFlags.get(i)) {
-                checkArgument((boolean) nullableArguments.get(i), "argument %s marked as @IsNull is not nullable in method: %s", i, methodHandle);
+        List<Class<?>> parameterList = methodHandle.type().parameterList();
+        if (parameterList.contains(ConnectorSession.class)) {
+            checkArgument(parameterList.stream().filter(ConnectorSession.class::equals).count() == 1, "function implementation should have exactly one ConnectorSession parameter");
+            if (!instanceFactory.isPresent()) {
+                checkArgument(parameterList.get(0) == ConnectorSession.class, "ConnectorSession must be the first argument when instanceFactory is not present");
+            }
+            else {
+                checkArgument(parameterList.get(1) == ConnectorSession.class, "ConnectorSession must be the second argument when instanceFactory is present");
             }
         }
     }
@@ -69,14 +85,9 @@ public final class ScalarFunctionImplementation
         return nullable;
     }
 
-    public List<Boolean> getNullableArguments()
+    public ArgumentProperty getArgumentProperty(int argumentIndex)
     {
-        return nullableArguments;
-    }
-
-    public List<Boolean> getNullFlags()
-    {
-        return nullFlags;
+        return argumentProperties.get(argumentIndex);
     }
 
     public MethodHandle getMethodHandle()
@@ -92,5 +103,97 @@ public final class ScalarFunctionImplementation
     public boolean isDeterministic()
     {
         return deterministic;
+    }
+
+    public static class ArgumentProperty
+    {
+        // TODO: Alternatively, we can store com.facebook.presto.spi.type.Type
+        private final ArgumentType argumentType;
+        private final Optional<NullConvention> nullConvention;
+        private final Optional<Class> lambdaInterface;
+
+        public static ArgumentProperty valueTypeArgumentProperty(NullConvention nullConvention)
+        {
+            return new ArgumentProperty(VALUE_TYPE, Optional.of(nullConvention), Optional.empty());
+        }
+
+        public static ArgumentProperty functionTypeArgumentProperty(Class lambdaInterface)
+        {
+            return new ArgumentProperty(FUNCTION_TYPE, Optional.empty(), Optional.of(lambdaInterface));
+        }
+
+        private ArgumentProperty(ArgumentType argumentType, Optional<NullConvention> nullConvention, Optional<Class> lambdaInterface)
+        {
+            switch (argumentType) {
+                case VALUE_TYPE:
+                    checkArgument(nullConvention.isPresent(), "nullConvention must present for value type");
+                    checkArgument(!lambdaInterface.isPresent(), "lambdaInterface must not present for value type");
+                    break;
+                case FUNCTION_TYPE:
+                    checkArgument(!nullConvention.isPresent(), "nullConvention must not present for function type");
+                    checkArgument(lambdaInterface.isPresent(), "lambdaInterface must present for function type");
+                    checkArgument(lambdaInterface.get().isAnnotationPresent(FunctionalInterface.class), "lambdaInterface must be annotated with FunctionalInterface");
+                    break;
+                default:
+                    throw new UnsupportedOperationException(format("Unsupported argument type: %s", argumentType));
+            }
+
+            this.argumentType = argumentType;
+            this.nullConvention = nullConvention;
+            this.lambdaInterface = lambdaInterface;
+        }
+
+        public ArgumentType getArgumentType()
+        {
+            return argumentType;
+        }
+
+        public NullConvention getNullConvention()
+        {
+            checkState(getArgumentType() == VALUE_TYPE, "nullConvention only applies to value type argument");
+            return nullConvention.get();
+        }
+
+        public Class getLambdaInterface()
+        {
+            checkState(getArgumentType() == FUNCTION_TYPE, "lambdaInterface only applies to function type argument");
+            return lambdaInterface.get();
+        }
+
+        @Override
+        public boolean equals(Object obj)
+        {
+            if (this == obj) {
+                return true;
+            }
+
+            if (obj == null || getClass() != obj.getClass()) {
+                return false;
+            }
+
+            ArgumentProperty other = (ArgumentProperty) obj;
+            return this.argumentType == other.argumentType &&
+                    this.nullConvention.equals(other.nullConvention) &&
+                    this.lambdaInterface.equals(other.lambdaInterface);
+        }
+
+        @Override
+        public int hashCode()
+        {
+            return Objects.hash(nullConvention, lambdaInterface);
+        }
+    }
+
+    public enum NullConvention
+    {
+        RETURN_NULL_ON_NULL,
+        USE_BOXED_TYPE,
+        USE_NULL_FLAG,
+    }
+
+    public enum ArgumentType
+    {
+        VALUE_TYPE,
+        FUNCTION_TYPE
     }
 }
