@@ -98,28 +98,28 @@ public class RecordPageSource
                 pageBuilder.declarePosition();
                 for (int column = 0; column < types.size(); column++) {
                     BlockBuilder output = pageBuilder.getBlockBuilder(column);
-                    if (cursor.isNull(column)) {
-                        output.appendNull();
+                    Type type = types.get(column);
+                    Class<?> javaType = type.getJavaType();
+                    if (javaType == boolean.class) {
+                        type.writeBoolean(output, cursor.getBoolean(column));
                     }
-                    else {
-                        Type type = types.get(column);
-                        Class<?> javaType = type.getJavaType();
-                        if (javaType == boolean.class) {
-                            type.writeBoolean(output, cursor.getBoolean(column));
-                        }
-                        else if (javaType == long.class) {
-                            type.writeLong(output, cursor.getLong(column));
-                        }
-                        else if (javaType == double.class) {
-                            type.writeDouble(output, cursor.getDouble(column));
-                        }
-                        else if (javaType == Slice.class) {
-                            Slice slice = cursor.getSlice(column);
-                            type.writeSlice(output, slice, 0, slice.length());
+                    else if (javaType == long.class) {
+                        type.writeLong(output, cursor.getLong(column));
+                    }
+                    else if (javaType == double.class) {
+                        type.writeDouble(output, cursor.getDouble(column));
+                    }
+                    else if (javaType == Slice.class) {
+                        Slice slice = cursor.getSlice(column);
+                        if (slice == null) {
+                            output.appendNull();
                         }
                         else {
-                            type.writeObject(output, cursor.getObject(column));
+                            type.writeSlice(output, slice, 0, slice.length());
                         }
+                    }
+                    else {
+                        type.writeObject(output, cursor.getObject(column));
                     }
                 }
             }

@@ -35,6 +35,7 @@ import io.airlift.log.Logger;
 import io.airlift.slice.Slice;
 import org.joda.time.chrono.ISOChronology;
 
+import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -47,6 +48,7 @@ import java.util.concurrent.TimeUnit;
 
 import static com.facebook.presto.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static com.facebook.presto.spi.type.Decimals.encodeScaledValue;
+import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static io.airlift.slice.Slices.utf8Slice;
 import static io.airlift.slice.Slices.wrappedBuffer;
@@ -199,17 +201,21 @@ public class JdbcRecordCursor
         try {
             Type type = getType(field);
             if (type instanceof VarcharType) {
-                return utf8Slice(resultSet.getString(field + 1));
+                String string = resultSet.getString(field + 1);
+                return string == null ? null : utf8Slice(string);
             }
             if (type instanceof CharType) {
-                return utf8Slice(CharMatcher.is(' ').trimTrailingFrom(resultSet.getString(field + 1)));
+                String string = resultSet.getString(field + 1);
+                return string == null ? null : utf8Slice(CharMatcher.is(' ').trimTrailingFrom(string));
             }
             if (type.equals(VarbinaryType.VARBINARY)) {
-                return wrappedBuffer(resultSet.getBytes(field + 1));
+                byte[] bytes = resultSet.getBytes(field + 1);
+                return bytes == null ? null : wrappedBuffer(bytes);
             }
             if (type instanceof DecimalType) {
                 // long decimal type
-                return encodeScaledValue(resultSet.getBigDecimal(field + 1));
+                BigDecimal bigDecimal = resultSet.getBigDecimal(field + 1);
+                return bigDecimal == null ? null : encodeScaledValue(bigDecimal);
             }
             throw new PrestoException(GENERIC_INTERNAL_ERROR, "Unhandled type for slice: " + type.getTypeSignature());
         }
@@ -227,7 +233,20 @@ public class JdbcRecordCursor
     @Override
     public boolean isNull(int field)
     {
-        return false;
+        checkState(!closed, "cursor is closed");
+        checkArgument(field < columnHandles.size(), "Invalid field index");
+
+        try {
+            // JDBC is kind of dumb: we need to read the field and then ask
+            // if it was null, which means we are wasting effort here.
+            // We could save the result of the field access if it matters.
+            resultSet.getObject(field + 1);
+
+            return resultSet.wasNull();
+        }
+        catch (SQLException | RuntimeException e) {
+            throw handleSqlException(e);
+        }
     }
 
     @SuppressWarnings({"UnusedDeclaration", "EmptyTryBlock"})
