@@ -47,7 +47,6 @@ import java.util.concurrent.TimeUnit;
 
 import static com.facebook.presto.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static com.facebook.presto.spi.type.Decimals.encodeScaledValue;
-import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static io.airlift.slice.Slices.utf8Slice;
 import static io.airlift.slice.Slices.wrappedBuffer;
@@ -228,20 +227,7 @@ public class JdbcRecordCursor
     @Override
     public boolean isNull(int field)
     {
-        checkState(!closed, "cursor is closed");
-        checkArgument(field < columnHandles.size(), "Invalid field index");
-
-        try {
-            // JDBC is kind of dumb: we need to read the field and then ask
-            // if it was null, which means we are wasting effort here.
-            // We could save the result of the field access if it matters.
-            resultSet.getObject(field + 1);
-
-            return resultSet.wasNull();
-        }
-        catch (SQLException | RuntimeException e) {
-            throw handleSqlException(e);
-        }
+        return false;
     }
 
     @SuppressWarnings({"UnusedDeclaration", "EmptyTryBlock"})
