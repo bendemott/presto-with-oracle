@@ -120,7 +120,7 @@ public class OracleClient
                 if (columnSize > VarcharType.MAX_LENGTH) {
                     return createUnboundedVarcharType();
                 }
-                return createVarcharType(columnSize);
+                return createVarcharType(columnSize == 255 ? 1 : columnSize);
             case Types.BLOB:
             case Types.BINARY:
             case Types.VARBINARY:
