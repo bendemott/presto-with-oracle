@@ -17,7 +17,6 @@ import com.facebook.presto.plugin.jdbc.BaseJdbcClient;
 import com.facebook.presto.plugin.jdbc.BaseJdbcConfig;
 import com.facebook.presto.plugin.jdbc.JdbcConnectorId;
 import com.facebook.presto.spi.type.CharType;
-import com.facebook.presto.spi.type.Decimals;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.VarcharType;
 import com.google.common.base.Throwables;
@@ -100,16 +99,12 @@ public class OracleClient
                 return BIGINT;
             case Types.REAL:
                 return REAL;
+            case Types.NUMERIC:
+                return createDecimalType(columnSize == 0 ? 38 : columnSize, max(decimalDigits, 0));
             case Types.FLOAT:
+            case Types.DECIMAL:
             case Types.DOUBLE:
                 return DOUBLE;
-            case Types.NUMERIC:
-            case Types.DECIMAL:
-                int precision = columnSize + max(-decimalDigits, 0); // Map decimal(p, -s) (negative scale) to decimal(p+s, 0).
-                if (precision > Decimals.MAX_PRECISION) {
-                    return null;
-                }
-                return createDecimalType(precision, max(decimalDigits, 0));
             case Types.CHAR:
             case Types.NCHAR:
                 return createCharType(min(columnSize, CharType.MAX_LENGTH));
@@ -117,10 +112,10 @@ public class OracleClient
             case Types.NVARCHAR:
             case Types.LONGVARCHAR:
             case Types.LONGNVARCHAR:
-                if (columnSize > VarcharType.MAX_LENGTH) {
+                if (columnSize > VarcharType.MAX_LENGTH || columnSize == 0) {
                     return createUnboundedVarcharType();
                 }
-                return createVarcharType(columnSize == 255 ? 1 : columnSize);
+                return createVarcharType(columnSize);
             case Types.BLOB:
             case Types.BINARY:
             case Types.VARBINARY:
