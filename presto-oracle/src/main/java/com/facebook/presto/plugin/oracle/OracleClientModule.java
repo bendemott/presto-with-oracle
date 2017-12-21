@@ -17,7 +17,6 @@ import com.facebook.presto.plugin.jdbc.BaseJdbcConfig;
 import com.facebook.presto.plugin.jdbc.JdbcClient;
 import com.google.inject.Binder;
 import com.google.inject.Scopes;
-
 import io.airlift.configuration.AbstractConfigurationAwareModule;
 
 import static io.airlift.configuration.ConfigBinder.configBinder;
@@ -29,7 +28,7 @@ public class OracleClientModule
     protected void setup(Binder binder)
     {
         binder.bind(JdbcClient.class).to(OracleClient.class).in(Scopes.SINGLETON);
-        configBinder(binder).bindConfig(BaseJdbcConfig.class);
+        buildConfigObject(BaseJdbcConfig.class);
         configBinder(binder).bindConfig(OracleConfig.class);
     }
 }

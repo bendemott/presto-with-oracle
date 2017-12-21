@@ -34,7 +34,6 @@ import com.facebook.presto.spi.type.VarcharType;
 import com.google.common.base.CharMatcher;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
-import io.airlift.log.Logger;
 import io.airlift.slice.Slice;
 import org.joda.time.chrono.ISOChronology;
 
@@ -59,11 +58,9 @@ import static java.lang.Float.floatToRawIntBits;
 import static java.util.Objects.requireNonNull;
 import static org.joda.time.DateTimeZone.UTC;
 
-public class OracleRecordsSet
+public class OracleRecordCursor
         implements RecordCursor
 {
-    private static final Logger log = Logger.get(OracleRecordsSet.class);
-
     private static final ISOChronology UTC_CHRONOLOGY = ISOChronology.getInstanceUTC();
 
     private final List<JdbcColumnHandle> columnHandles;
@@ -73,14 +70,13 @@ public class OracleRecordsSet
     private final ResultSet resultSet;
     private boolean closed;
 
-    public OracleRecordsSet(JdbcClient jdbcClient, JdbcSplit split, List<JdbcColumnHandle> columnHandles)
+    public OracleRecordCursor(JdbcClient jdbcClient, JdbcSplit split, List<JdbcColumnHandle> columnHandles)
     {
         this.columnHandles = ImmutableList.copyOf(requireNonNull(columnHandles, "columnHandles is null"));
 
         try {
             connection = jdbcClient.getConnection(split);
             statement = jdbcClient.buildSql(connection, split, columnHandles);
-            log.debug("Executing: %s", statement.toString());
             resultSet = statement.executeQuery();
         }
         catch (SQLException | RuntimeException e) {
