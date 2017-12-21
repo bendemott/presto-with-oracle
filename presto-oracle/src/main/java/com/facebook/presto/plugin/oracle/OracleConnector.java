@@ -59,6 +59,7 @@ public class OracleConnector
             JdbcMetadataFactory jdbcMetadataFactory,
             JdbcSplitManager jdbcSplitManager,
             OracleRecordSetProvider oracleRecordSetProvider,
+            OraclePageSourceProvider oraclePageSourceProvider,
             JdbcPageSinkProvider jdbcPageSinkProvider)
     {
         this.lifeCycleManager = requireNonNull(lifeCycleManager, "lifeCycleManager is null");
@@ -66,7 +67,7 @@ public class OracleConnector
         this.jdbcSplitManager = requireNonNull(jdbcSplitManager, "jdbcSplitManager is null");
         this.oracleRecordSetProvider = requireNonNull(oracleRecordSetProvider, "jdbcRecordSetProvider is null");
         this.jdbcPageSinkProvider = requireNonNull(jdbcPageSinkProvider, "jdbcPageSinkProvider is null");
-        this.oraclePageSourceProvider = new OraclePageSourceProvider(oracleRecordSetProvider);
+        this.oraclePageSourceProvider = requireNonNull(oraclePageSourceProvider, "jdbcPageSinkProvider is null");
     }
 
     @Override

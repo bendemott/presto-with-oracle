@@ -18,7 +18,6 @@ import com.facebook.presto.spi.ConnectorPageSource;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.ConnectorSplit;
 import com.facebook.presto.spi.connector.ConnectorPageSourceProvider;
-import com.facebook.presto.spi.connector.ConnectorRecordSetProvider;
 import com.facebook.presto.spi.connector.ConnectorTransactionHandle;
 import com.google.inject.Inject;
 
@@ -29,17 +28,17 @@ import static java.util.Objects.requireNonNull;
 public class OraclePageSourceProvider
         implements ConnectorPageSourceProvider
 {
-    private ConnectorRecordSetProvider recordSetProvider;
+    private OracleRecordSetProvider oracleRecordSetProvider;
 
     @Inject
-    public OraclePageSourceProvider(ConnectorRecordSetProvider recordSetProvider)
+    public OraclePageSourceProvider(OracleRecordSetProvider oracleRecordSetProvider)
     {
-        this.recordSetProvider = requireNonNull(recordSetProvider, "recordSetProvider is null");
+        this.oracleRecordSetProvider = requireNonNull(oracleRecordSetProvider, "recordSetProvider is null");
     }
 
     @Override
     public ConnectorPageSource createPageSource(ConnectorTransactionHandle transactionHandle, ConnectorSession session, ConnectorSplit split, List<ColumnHandle> columns)
     {
-        return new OraclePageSource(recordSetProvider.getRecordSet(transactionHandle, session, split, columns));
+        return new OraclePageSource(oracleRecordSetProvider.getRecordSet(transactionHandle, session, split, columns));
     }
 }

@@ -42,6 +42,7 @@ public class OracleModule
         binder.bind(JdbcMetadataFactory.class).in(Scopes.SINGLETON);
         binder.bind(JdbcSplitManager.class).in(Scopes.SINGLETON);
         binder.bind(OracleRecordSetProvider.class).in(Scopes.SINGLETON);
+        binder.bind(OraclePageSourceProvider.class).in(Scopes.SINGLETON);
         binder.bind(JdbcPageSinkProvider.class).in(Scopes.SINGLETON);
         binder.bind(OracleConnector.class).in(Scopes.SINGLETON);
         configBinder(binder).bindConfig(JdbcMetadataConfig.class);
