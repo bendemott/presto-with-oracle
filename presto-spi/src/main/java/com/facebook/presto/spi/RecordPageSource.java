@@ -14,29 +14,14 @@
 package com.facebook.presto.spi;
 
 import com.facebook.presto.spi.block.BlockBuilder;
-import com.facebook.presto.spi.type.BigintType;
-import com.facebook.presto.spi.type.DateType;
-import com.facebook.presto.spi.type.DecimalType;
-import com.facebook.presto.spi.type.IntegerType;
-import com.facebook.presto.spi.type.RealType;
-import com.facebook.presto.spi.type.SmallintType;
-import com.facebook.presto.spi.type.TimeType;
-import com.facebook.presto.spi.type.TimestampType;
-import com.facebook.presto.spi.type.TinyintType;
 import com.facebook.presto.spi.type.Type;
 import io.airlift.slice.Slice;
-import org.joda.time.chrono.ISOChronology;
 
-import java.math.BigDecimal;
-import java.sql.Date;
-import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 
 import static java.util.Collections.unmodifiableList;
 import static java.util.Objects.requireNonNull;
-import static org.joda.time.DateTimeZone.UTC;
 
 public class RecordPageSource
         implements ConnectorPageSource
@@ -113,78 +98,28 @@ public class RecordPageSource
                 pageBuilder.declarePosition();
                 for (int column = 0; column < types.size(); column++) {
                     BlockBuilder output = pageBuilder.getBlockBuilder(column);
-                    Type type = types.get(column);
-                    Class<?> javaType = type.getJavaType();
-                    if (javaType == boolean.class) {
-                        Object object = cursor.getObject(column);
-                        if (object == null) {
-                            output.appendNull();
-                        }
-                        else {
-                            type.writeBoolean(output, (Boolean) object);
-                        }
-                    }
-                    else if (javaType == long.class) {
-                        Object object = cursor.getObject(column);
-                        if (object == null) {
-                            output.appendNull();
-                        }
-                        else {
-                            if (type.equals(TinyintType.TINYINT)) {
-                                type.writeLong(output, (Long) object);
-                            }
-                            if (type.equals(SmallintType.SMALLINT)) {
-                                type.writeLong(output, (Long) object);
-                            }
-                            if (type.equals(IntegerType.INTEGER)) {
-                                type.writeLong(output, (Long) object);
-                            }
-                            if (type.equals(RealType.REAL)) {
-                                type.writeLong(output, Float.floatToRawIntBits((Float) object));
-                            }
-                            if (type.equals(BigintType.BIGINT)) {
-                                type.writeLong(output, (Long) object);
-                            }
-                            if (type instanceof DecimalType) {
-                                // short decimal type
-                                type.writeLong(output, ((BigDecimal) object).unscaledValue().longValueExact());
-                            }
-                            if (type.equals(DateType.DATE)) {
-                                // JDBC returns a date using a timestamp at midnight in the JVM timezone
-                                long localMillis = ((Date) object).getTime();
-                                // Convert it to a midnight in UTC
-                                long utcMillis = ISOChronology.getInstance().getZone().getMillisKeepLocal(UTC, localMillis);
-                                // convert to days
-                                type.writeLong(output, TimeUnit.MILLISECONDS.toDays(utcMillis));
-                            }
-                            if (type.equals(TimeType.TIME)) {
-                                type.writeLong(output, ISOChronology.getInstanceUTC().millisOfDay().get((Long) object));
-                            }
-                            if (type.equals(TimestampType.TIMESTAMP)) {
-                                type.writeLong(output, ((Timestamp) object).getTime());
-                            }
-                        }
-                    }
-                    else if (javaType == double.class) {
-                        Object object = cursor.getObject(column);
-                        if (object == null) {
-                            output.appendNull();
-                        }
-                        else {
-                            type.writeDouble(output, (Double) object);
-                        }
-                    }
-                    else if (javaType == Slice.class) {
-                        Slice slice = cursor.getSlice(column);
-                        if (slice == null) {
-                            output.appendNull();
-                        }
-                        else {
-                            type.writeSlice(output, slice, 0, slice.length());
-                        }
+                    if (cursor.isNull(column)) {
+                        output.appendNull();
                     }
                     else {
-                        type.writeObject(output, cursor.getObject(column));
+                        Type type = types.get(column);
+                        Class<?> javaType = type.getJavaType();
+                        if (javaType == boolean.class) {
+                            type.writeBoolean(output, cursor.getBoolean(column));
+                        }
+                        else if (javaType == long.class) {
+                            type.writeLong(output, cursor.getLong(column));
+                        }
+                        else if (javaType == double.class) {
+                            type.writeDouble(output, cursor.getDouble(column));
+                        }
+                        else if (javaType == Slice.class) {
+                            Slice slice = cursor.getSlice(column);
+                            type.writeSlice(output, slice, 0, slice.length());
+                        }
+                        else {
+                            type.writeObject(output, cursor.getObject(column));
+                        }
                     }
                 }
             }

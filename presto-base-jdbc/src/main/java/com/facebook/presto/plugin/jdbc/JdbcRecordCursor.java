@@ -35,7 +35,6 @@ import io.airlift.log.Logger;
 import io.airlift.slice.Slice;
 import org.joda.time.chrono.ISOChronology;
 
-import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -201,21 +200,17 @@ public class JdbcRecordCursor
         try {
             Type type = getType(field);
             if (type instanceof VarcharType) {
-                String string = resultSet.getString(field + 1);
-                return string == null ? null : utf8Slice(string);
+                return utf8Slice(resultSet.getString(field + 1));
             }
             if (type instanceof CharType) {
-                String string = resultSet.getString(field + 1);
-                return string == null ? null : utf8Slice(CharMatcher.is(' ').trimTrailingFrom(string));
+                return utf8Slice(CharMatcher.is(' ').trimTrailingFrom(resultSet.getString(field + 1)));
             }
             if (type.equals(VarbinaryType.VARBINARY)) {
-                byte[] bytes = resultSet.getBytes(field + 1);
-                return bytes == null ? null : wrappedBuffer(bytes);
+                return wrappedBuffer(resultSet.getBytes(field + 1));
             }
             if (type instanceof DecimalType) {
                 // long decimal type
-                BigDecimal bigDecimal = resultSet.getBigDecimal(field + 1);
-                return bigDecimal == null ? null : encodeScaledValue(bigDecimal);
+                return encodeScaledValue(resultSet.getBigDecimal(field + 1));
             }
             throw new PrestoException(GENERIC_INTERNAL_ERROR, "Unhandled type for slice: " + type.getTypeSignature());
         }
@@ -227,13 +222,7 @@ public class JdbcRecordCursor
     @Override
     public Object getObject(int field)
     {
-        checkState(!closed, "cursor is closed");
-        try {
-            return resultSet.getObject(field + 1);
-        }
-        catch (SQLException | RuntimeException e) {
-            throw handleSqlException(e);
-        }
+        throw new UnsupportedOperationException();
     }
 
     @Override
