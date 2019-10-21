@@ -33,7 +33,9 @@ import com.facebook.presto.spi.type.VarbinaryType;
 import com.facebook.presto.spi.type.VarcharType;
 import com.google.common.base.CharMatcher;
 import com.google.common.base.Throwables;
+import com.facebook.presto.plugin.jdbc.JdbcIdentity;
 import com.google.common.collect.ImmutableList;
+import com.facebook.presto.spi.ConnectorSession;
 import io.airlift.slice.Slice;
 import org.joda.time.chrono.ISOChronology;
 
@@ -70,12 +72,12 @@ public class OracleRecordCursor
     private final ResultSet resultSet;
     private boolean closed;
 
-    public OracleRecordCursor(JdbcClient jdbcClient, JdbcSplit split, List<JdbcColumnHandle> columnHandles)
+    public OracleRecordCursor(JdbcClient jdbcClient, ConnectorSession session, JdbcSplit split, List<JdbcColumnHandle> columnHandles)
     {
         this.columnHandles = ImmutableList.copyOf(requireNonNull(columnHandles, "columnHandles is null"));
 
         try {
-            connection = jdbcClient.getConnection(split);
+            connection = jdbcClient.getConnection(JdbcIdentity.from(session), split);
             statement = jdbcClient.buildSql(connection, split, columnHandles);
             resultSet = statement.executeQuery();
         }
