@@ -50,7 +50,7 @@ public class OracleRecordSetProvider
         for (ColumnHandle handle : columns) {
             handles.add((JdbcColumnHandle) handle);
         }
-
-        return new OracleRecordSet(jdbcClient, jdbcSplit, handles.build());
+        // RecordSetProvider -> RecordSet -> RecordCursor
+        return new OracleRecordSet(jdbcClient, session, jdbcSplit, handles.build());
     }
 }

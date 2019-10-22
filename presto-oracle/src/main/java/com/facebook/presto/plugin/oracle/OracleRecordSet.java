@@ -20,6 +20,7 @@ import com.facebook.presto.spi.RecordCursor;
 import com.facebook.presto.spi.RecordSet;
 import com.facebook.presto.spi.type.Type;
 import com.google.common.collect.ImmutableList;
+import com.facebook.presto.spi.ConnectorSession;
 
 import java.util.List;
 
@@ -32,8 +33,9 @@ public class OracleRecordSet
     private final List<JdbcColumnHandle> columnHandles;
     private final List<Type> columnTypes;
     private final JdbcSplit split;
+    private final ConnectorSession session;
 
-    public OracleRecordSet(JdbcClient jdbcClient, JdbcSplit split, List<JdbcColumnHandle> columnHandles)
+    public OracleRecordSet(JdbcClient jdbcClient, ConnectorSession session, JdbcSplit split, List<JdbcColumnHandle> columnHandles)
     {
         this.jdbcClient = requireNonNull(jdbcClient, "jdbcClient is null");
         this.split = requireNonNull(split, "split is null");
@@ -45,6 +47,7 @@ public class OracleRecordSet
             types.add(column.getColumnType());
         }
         this.columnTypes = types.build();
+        this.session = requireNonNull(session, "session is null");
     }
 
     @Override
@@ -56,6 +59,6 @@ public class OracleRecordSet
     @Override
     public RecordCursor cursor()
     {
-        return new OracleRecordCursor(jdbcClient, split, columnHandles);
+        return new OracleRecordCursor(jdbcClient, session, split, columnHandles);
     }
 }

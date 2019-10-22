@@ -28,7 +28,7 @@
     <properties>
         <maven.compiler.target>1.8</maven.compiler.target>
         <maven.compiler.source>1.8</maven.compiler.source>
-        
+
         <dep.presto.version>0.225</dep.presto.version>
         <dep.airlift.version>0.178</dep.airlift.version>
         <dep.slice.version>0.36</dep.slice.version>

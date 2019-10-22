@@ -13,24 +13,27 @@
  */
 package com.facebook.presto.plugin.oracle;
 
-import com.facebook.presto.plugin.jdbc.BaseJdbcClient;
-import com.facebook.presto.plugin.jdbc.BaseJdbcConfig;
-import com.facebook.presto.plugin.jdbc.JdbcConnectorId;
+import com.facebook.presto.plugin.jdbc.*;
+import com.facebook.presto.spi.ConnectorSession;
+import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.type.CharType;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.VarcharType;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableSet;
+import com.facebook.presto.spi.SchemaTableName;
+
 import oracle.jdbc.OracleDriver;
 
+import javax.annotation.Nullable;
 import javax.inject.Inject;
 
-import java.sql.Connection;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.sql.Types;
-import java.util.Set;
+import java.sql.*;
+import java.util.*;
 
+import static com.google.common.collect.Iterables.getOnlyElement;
+import static com.facebook.presto.plugin.jdbc.StandardReadMappings.jdbcTypeToPrestoType;
+import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.CharType.createCharType;
@@ -48,86 +51,104 @@ import static com.facebook.presto.spi.type.VarcharType.createUnboundedVarcharTyp
 import static com.facebook.presto.spi.type.VarcharType.createVarcharType;
 import static java.lang.Math.max;
 import static java.lang.Math.min;
+import static com.facebook.presto.plugin.jdbc.JdbcErrorCode.JDBC_ERROR;
 
 public class OracleClient
         extends BaseJdbcClient
 {
+    private final String META_DB_NAME_FIELD = "TABLE_CATALOG";
+
     @Inject
-    public OracleClient(JdbcConnectorId connectorId, BaseJdbcConfig config, OracleConfig oracleConfig)
-            throws SQLException
+    public OracleClient(JdbcConnectorId connectorId, BaseJdbcConfig config)
     {
-        super(connectorId, config, "", new OracleDriver());
+        super(connectorId, config, "\"", new DriverConnectionFactory(new OracleDriver(), config));
     }
 
     @Override
-    public Set<String> getSchemaNames()
+    protected Collection<String> listSchemas(Connection connection)
     {
-        try (Connection connection = driver.connect(connectionUrl, connectionProperties);
-             ResultSet resultSet = connection.getMetaData().getSchemas()) {
+        try (ResultSet resultSet = connection.getMetaData().getSchemas()) {
             ImmutableSet.Builder<String> schemaNames = ImmutableSet.builder();
             while (resultSet.next()) {
-                String schemaName = resultSet.getString(1).toLowerCase();
-                schemaNames.add(schemaName);
+                // Database Names in "TABLE_CATALOG" instead of "TABLE_SCHEM" for Oracle
+                String schemaName = resultSet.getString(META_DB_NAME_FIELD);
+                // skip internal schemas
+                if (!schemaName.equalsIgnoreCase("information_schema")) {
+                    schemaNames.add(schemaName);
+                }
             }
             return schemaNames.build();
-        } catch (SQLException e) {
-            throw Throwables.propagate(e);
         }
-    }
-
-    protected ResultSet getTables(Connection connection, String schemaName, String tableName)
-            throws SQLException
-    {
-        // Here we put TABLE and SYNONYM when the table schema is another user schema
-        return connection.getMetaData().getTables(null, schemaName, tableName, new String[]{"TABLE", "SYNONYM"});
+        catch (SQLException e) {
+            throw new PrestoException(JDBC_ERROR, e);
+        }
     }
 
     @Override
-    protected Type toPrestoType(int jdbcType, int columnSize, int decimalDigits)
+    /**
+     * Retrieve information about tables/views using the JDBC Drivers DatabaseMetaData api,
+     * Include "SYNONYMS" - functionality specific to Oracle
+     */
+    protected ResultSet getTables(Connection connection, Optional<String> schemaName, Optional<String> tableName)
+            throws SQLException
     {
-        switch (jdbcType) {
-            case Types.BIT:
-            case Types.BOOLEAN:
-                return BOOLEAN;
-            case Types.TINYINT:
-                return TINYINT;
-            case Types.SMALLINT:
-                return SMALLINT;
-            case Types.INTEGER:
-                return INTEGER;
-            case Types.BIGINT:
-                return BIGINT;
-            case Types.REAL:
-                return REAL;
-            case Types.NUMERIC:
-                return createDecimalType(columnSize == 0 ? 38 : columnSize, max(decimalDigits, 0));
-            case Types.FLOAT:
-            case Types.DECIMAL:
-            case Types.DOUBLE:
-                return DOUBLE;
-            case Types.CHAR:
-            case Types.NCHAR:
-                return createCharType(min(columnSize, CharType.MAX_LENGTH));
-            case Types.VARCHAR:
-            case Types.NVARCHAR:
-            case Types.LONGVARCHAR:
-            case Types.LONGNVARCHAR:
-                if (columnSize > VarcharType.MAX_LENGTH || columnSize == 0) {
-                    return createUnboundedVarcharType();
+        // Exactly like the parent class, except we include "SYNONYM" - specific to Oracle
+        DatabaseMetaData metadata = connection.getMetaData();
+        Optional<String> escape = Optional.ofNullable(metadata.getSearchStringEscape());
+        return metadata.getTables(
+                connection.getCatalog(),
+                escapeNamePattern(schemaName, escape).orElse(null),
+                escapeNamePattern(tableName, escape).orElse(null),
+                new String[] {"TABLE", "VIEW", "SYNONYM"});
+    }
+
+    @Nullable
+    @Override
+    public JdbcTableHandle getTableHandle(JdbcIdentity identity, SchemaTableName schemaTableName)
+    {
+        try (Connection connection = connectionFactory.openConnection(identity)) {
+            String remoteSchema = toRemoteSchemaName(identity, connection, schemaTableName.getSchemaName());
+            String remoteTable = toRemoteTableName(identity, connection, remoteSchema, schemaTableName.getTableName());
+            try (ResultSet resultSet = getTables(connection, Optional.of(remoteSchema), Optional.of(remoteTable))) {
+                List<JdbcTableHandle> tableHandles = new ArrayList<>();
+                while (resultSet.next()) {
+                    tableHandles.add(new JdbcTableHandle(
+                            connectorId,
+                            schemaTableName,
+                            resultSet.getString("TABLE_CAT"),
+                            resultSet.getString(META_DB_NAME_FIELD),
+                            resultSet.getString("TABLE_NAME")));
                 }
-                return createVarcharType(columnSize);
-            case Types.BLOB:
-            case Types.BINARY:
-            case Types.VARBINARY:
-            case Types.LONGVARBINARY:
-                return VARBINARY;
-            case Types.DATE:
-                return DATE;
-            case Types.TIME:
-                return TIME;
-            case Types.TIMESTAMP:
-                return TIMESTAMP;
+                if (tableHandles.isEmpty()) {
+                    return null;
+                }
+                if (tableHandles.size() > 1) {
+                    throw new PrestoException(NOT_SUPPORTED, "Multiple tables matched: " + schemaTableName);
+                }
+                return getOnlyElement(tableHandles);
+            }
         }
-        return null;
+        catch (SQLException e) {
+            throw new PrestoException(JDBC_ERROR, e);
+        }
+    }
+
+    protected String getTableSchemaName(ResultSet resultSet)
+            throws SQLException
+    {
+        return resultSet.getString(META_DB_NAME_FIELD);
+    }
+
+    @Override
+    public Optional<ReadMapping> toPrestoType(ConnectorSession session, JdbcTypeHandle typeHandle)
+    //protected Type toPrestoType(int jdbcType, int columnSize, int decimalDigits)
+    {
+        int columnSize = typeHandle.getColumnSize();
+        // TODO JSON support
+        switch (typeHandle.getJdbcType()) {
+            // handle Oracle specific types
+            default:
+                return jdbcTypeToPrestoType(typeHandle);
+        }
     }
 }
