@@ -30,9 +30,9 @@ public class OracleModule
 {
     private final String connectorId;
 
-    public OracleModule(String connectorId)
+    public OracleModule(String catalogName)
     {
-        this.connectorId = requireNonNull(connectorId, "connector id is null");
+        this.connectorId = requireNonNull(catalogName, "catalogName is null");
     }
 
     @Override
