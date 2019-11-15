@@ -21,6 +21,7 @@ import com.facebook.presto.spi.StandardErrorCode;
 import com.facebook.presto.spi.type.Decimals;
 import com.google.common.collect.ImmutableSet;
 import io.airlift.log.Logger;
+import jdk.nashorn.internal.ir.annotations.Ignore;
 import oracle.jdbc.OracleDriver;
 
 import javax.annotation.Nullable;
@@ -225,14 +226,8 @@ public class OracleClient
     {
         // The COLUMN_SIZE column specifies the column size for the given column. For numeric data, this is the maximum precision of the column
 
-        // -- Get configuration options from Oracle catalog ---------------------------------------
-        RoundingMode roundMode = oracleConfig.getRoundingMode();
-        int defaultScale = oracleConfig.getDefaultNumberScale();
-        UnsupportedTypeHandling unsupportedMode = oracleConfig.getUnsupportedTypeStrategy();
-        boolean undefinedNumberScaleAsInt = oracleConfig.isUndefinedScaleInteger();
-
-        // -- Get Column Field Size  --------------------------------------------------------------
-        int columnSize = typeHandle.getColumnSize();
+        String error = "";
+        OracleJdbcTypeHandle orcTypeHandle = new OracleJdbcTypeHandle(typeHandle);
 
         // -- Handle JDBC to Presto Type Mappings -------------------------------------------------
         Optional<ReadMapping> readType = Optional.empty();
@@ -242,75 +237,13 @@ public class OracleClient
                 break;
             case Types.DECIMAL:
             case Types.NUMERIC:
-                ReadMapping readFunc;
-                // decimalDigits provides NUMERIC Scale (to the right of the decimal place)
-                int decimalDigits = typeHandle.getDecimalDigits();
-                int absScale = Math.abs(decimalDigits);
-                // columnSize provides NUMERIC Precision (total significant digits)
-                int realPrecision = columnSize + max(-decimalDigits, 0);
-                int logicalPrecision = min(realPrecision, Decimals.MAX_PRECISION); // Map decimal(p, -s) (negative scale) to decimal(p+s, 0).
-                int logicalScale = min(max(decimalDigits, 0), Decimals.MAX_PRECISION);
-                String typeName = JDBCType.valueOf(typeHandle.getJdbcType()).getName();
-
-                boolean unsupported = true;
-                String reason = null;
-
-                if(decimalDigits == 0 && defaultScale == OracleConfig.UNDEFINED_SCALE && !undefinedNumberScaleAsInt) {
-                    reason = "type has no scale (0) and 'oracle.number.default-scale' is not set";
-                } else if(roundMode.equals(RoundingMode.UNNECESSARY)) {
-                    if (decimalDigits == 0) {
-                        reason = String.format("scale isn't set (0) - unknown scale");
-                    } else if (realPrecision > Decimals.MAX_PRECISION) {
-                        reason = String.format("precision exceeds Presto MAX_PRECISION of %d",
-                                Decimals.MAX_PRECISION);
-                    } else if (absScale > Decimals.MAX_PRECISION) {
-                        reason = String.format("scale exceeds Presto MAX_PRECISION of %d",
-                                Decimals.MAX_PRECISION);
-                    } else {
-                        unsupported = false;
-                    }
-                } else {
-                    unsupported = false;
-                }
-
-                if(unsupported) {
-                    LOG.info("!!!!!!!!!!!!!! in unsupported");
-                    // The data-type is unsupported in the current configuration
-                    reason = String.format("JDBC DataType Unsupported - %s(%d,%d) %s %n... You can change this behavior" +
-                                    "by modifying the configuration parameters 'oracle.number.rounding-mode' and " +
-                                    "'unsupported-type.handling-strategy'",
-                            typeName,
-                            decimalDigits,
-                            columnSize,
-                            reason);
-                    switch(unsupportedMode) {
-                        case IGNORE:
-                            LOG.warn(reason);
-                            break;
-                        case FAIL:
-                            throw new PrestoException(StandardErrorCode.GENERIC_INTERNAL_ERROR, reason);
-                        case CONVERT_TO_VARCHAR:
-                            readFunc = OracleReadMappings.stringDecimalReadMapping(createUnboundedVarcharType());
-                            readType = Optional.of(readFunc);
-                            break;
-                    }
-                } else {
-                    LOG.info("!!!!!!!!!!!! in supported");
-                    if(decimalDigits == 0 && undefinedNumberScaleAsInt == true) {
-                        LOG.info("!!!!!!!!!!!! in integerReadMapping");
-                        readFunc = integerReadMapping();
-                        readType = Optional.of(readFunc);
-                    } else {
-                        LOG.info("!!!!!!!!!!!! in supported roundDecimalReadMapping");
-                        // This is the 'normal' happy path, use our custom ReadMapping function to parse the decimal value
-                        // or round the value to the needed scale
-                        if(logicalScale == 0) {
-                            logicalScale = defaultScale;
-                        }
-                        readFunc = OracleReadMappings.roundDecimalReadMapping(
-                                createDecimalType(logicalPrecision, logicalScale), realPrecision, roundMode);
-                        readType = Optional.of(readFunc);
-                    }
+                try {
+                    OracleNumberHandling numberHandling = new OracleNumberHandling(orcTypeHandle, this.oracleConfig);
+                    readType = Optional.of(numberHandling.getReadMapping());
+                } catch (IgnoreFieldException ex) {
+                    return Optional.empty(); // skip field
+                } catch (PrestoException ex) {
+                    error  = ex.toString();
                 }
                 break;
             default:
@@ -318,15 +251,20 @@ public class OracleClient
                 readType = jdbcTypeToPrestoType(typeHandle);
         }
 
-        if(readType.isPresent()) { // The readType is empty
-            // data type was unhandled
-            int precision = typeHandle.getColumnSize();
-            int scale = typeHandle.getDecimalDigits();
-            int typeCode = typeHandle.getJdbcType();
-            String typeName = JDBCType.valueOf(typeCode).getName();
-            LOG.warn("Unhandled Column Type %s:%s [%s, %s] (precision, scale)", typeName, typeCode, precision, scale);
-        }
+        if(!readType.isPresent()) {
+            String msg = String.format("unsupported type %s - %s", orcTypeHandle.getDescription(), error);
+            switch(oracleConfig.getUnsupportedTypeStrategy()) {
+                case CONVERT_TO_VARCHAR:
+                    readType = Optional.of(StandardReadMappings.varcharReadMapping(createUnboundedVarcharType()));
+                    break;
+                case IGNORE:
+                    LOG.info(msg + " - 'unsupported-type.handling-strategy' = IGNORE");
+                case FAIL:
+                    throw new PrestoException(StandardErrorCode.GENERIC_INTERNAL_ERROR,
+                            msg + " - 'unsupported-type.handling-strategy' = FAIL");
 
+            }
+        }
         return readType;
     }
 }
