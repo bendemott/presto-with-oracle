@@ -8,7 +8,6 @@ import com.facebook.presto.spi.type.DecimalType;
 import com.facebook.presto.spi.type.Decimals;
 
 import java.sql.JDBCType;
-import java.sql.Types;
 
 import static com.facebook.presto.spi.type.DecimalType.createDecimalType;
 import static com.facebook.presto.spi.type.VarcharType.createUnboundedVarcharType;
@@ -129,9 +128,10 @@ public class OracleNumberHandling {
             DecimalType prestoDecimal = createDecimalType(readHandle.getPrecision(), readHandle.getScale());
             if(typeHandle.isTypeLimitExceeded() || typeHandle.isPrecisionUndefined() || typeHandle.isScaleUndefined()) {
                 // if the type exceeds limits, or is undefined in precision or scale, we might have to round.
-                // so return the rounding version of
+                // so return the rounding version of the read function
                 readMapping = OracleReadMappings.roundDecimalPrecisionAndScale(prestoDecimal, config.getNumberDecimalRoundMode());
             } else {
+                // if the type is well-defined and falls within our limits, Presto's default read function can be used
                 readMapping = StandardReadMappings.decimalReadMapping(prestoDecimal);
             }
             return;
@@ -152,8 +152,10 @@ public class OracleNumberHandling {
         }
     }
 
-
-
+    /**
+     * Get the ReadMapping function for the given jdbc column type
+     * @return
+     */
     public ReadMapping getReadMapping() {
         return readMapping;
     }
