@@ -17,19 +17,13 @@ import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.type.Decimals;
 import io.airlift.configuration.Config;
 import io.airlift.units.Duration;
-import oracle.sql.ARRAY;
 
 import java.math.RoundingMode;
 import javax.validation.constraints.Min;
 import java.sql.JDBCType;
-import java.sql.Types;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import static com.facebook.presto.spi.StandardErrorCode.CONFIGURATION_INVALID;;
 
@@ -39,12 +33,15 @@ public class OracleConfig
     public static final int UNDEFINED_SCALE = OracleJdbcTypeHandle.UNDEFINED_SCALE;
     private static final JDBCType[] ALLOWED_NUMBER_DEFAULT_TYPES = {JDBCType.DECIMAL, JDBCType.DOUBLE, JDBCType.INTEGER};
 
+    private boolean synonymsEnabled = false;
     private UnsupportedTypeHandling typeStrategy = UnsupportedTypeHandling.IGNORE;
-    private UnsupportedTypeHandling numberExceedsLimitsMode = UnsupportedTypeHandling.ROUND;
     private boolean autoReconnect = true;
     private int maxReconnects = 3;
     private Duration connectionTimeout = new Duration(10, TimeUnit.SECONDS);
-    private boolean synonymsEnabled = false;
+    private UnsupportedTypeHandling numberExceedsLimitsMode = UnsupportedTypeHandling.ROUND;
+    private List<OracleJdbcTypeHandle> numberAsIntegerTypes = new ArrayList<>();
+    private List<OracleJdbcTypeHandle> numberAsDoubleTypes = new ArrayList<>();
+    private List<OracleJdbcTypeHandle> numberAsDecimalTypes = new ArrayList<>();
     private JDBCType numberTypeDefault = JDBCType.DECIMAL;
     private JDBCType numberZeroScaleType = UNDEFINED_TYPE;
     private JDBCType numberNullScaleType = UNDEFINED_TYPE;
@@ -159,7 +156,7 @@ public class OracleConfig
     /** Get oracle.number.type.as-integer */
     public List<OracleJdbcTypeHandle> getNumberAsIntegerTypes()
     {
-        return null; // TODO
+        return numberAsIntegerTypes; // TODO
     }
 
     /**
@@ -170,7 +167,7 @@ public class OracleConfig
     @Config("oracle.number.type.as-integer")
     public OracleConfig setNumberAsIntegerTypes(String precisions)
     {
-        return null; // TODO
+        return this; // TODO
     }
 
     // ------------------------------------------------------------------------
@@ -178,7 +175,7 @@ public class OracleConfig
     /** Get oracle.number.type.as-double*/
     public List<OracleJdbcTypeHandle> getNumberAsDoubleTypes()
     {
-        return null; // TODO
+        return numberAsDoubleTypes; // TODO
     }
 
     /**
@@ -189,7 +186,7 @@ public class OracleConfig
     @Config("oracle.number.type.as-double")
     public OracleConfig setNumberAsDoubleTypes(String precisions)
     {
-        return null; // TODO
+        return this; // TODO
     }
 
     // ------------------------------------------------------------------------
@@ -197,7 +194,7 @@ public class OracleConfig
     /** Get oracle.number.type.as-decimal*/
     public List<OracleJdbcTypeHandle> getNumberAsDecimalTypes()
     {
-        return null; // TODO
+        return numberAsDecimalTypes; // TODO
     }
 
     /**
@@ -208,7 +205,7 @@ public class OracleConfig
     @Config("oracle.number.type.as-decimal")
     public OracleConfig setNumberAsDecimalTypes(String precisions)
     {
-        return null; // TODO
+        return this; // TODO
     }
 
     // ------------------------------------------------------------------------
@@ -394,8 +391,9 @@ public class OracleConfig
         if(precisions == null || precisions.isEmpty()) {
             return this;
         }
+        return this;
         // TODO
-        throw new PrestoException(CONFIGURATION_INVALID, "NOT IMPLEMENTED YET");
+        //throw new PrestoException(CONFIGURATION_INVALID, "NOT IMPLEMENTED YET");
         //return this;
     }
 

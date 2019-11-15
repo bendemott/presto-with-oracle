@@ -49,7 +49,7 @@ DriverConnectionFactory is where the connection is actually made
 "connection-user": "a88688",
 "connection-password": "welcome1",
 "unsupported-type.handling-strategy": "CONVERT_TO_VARCHAR",
-"oracle.number.default-scale": 14,
+"oracle.synonyms.enabled": false
 "oracle.number.exceeds-limits": "CONVERT_TO_VARCHAR", "ROUND" to enable rounding mode
 "oracle.number.default-type": "DECIMAL",
 "oracle.number.precision.zero-scale-type": "INTEGER",
@@ -61,5 +61,4 @@ DriverConnectionFactory is where the connection is actually made
 "oracle.number.decimal.default-scale.absolute": 0,
 "oracle.number.decimal.default-scale.ratio": 0.3,
 "oracle.number.decimal.round-mode": "HALF_EVEN",
-"oracle.synonyms.enabled": false
 ```

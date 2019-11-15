@@ -1,3 +1,16 @@
+/*
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package com.facebook.presto.plugin.oracle;
 
 import com.facebook.presto.plugin.jdbc.JdbcTypeHandle;
@@ -25,7 +38,7 @@ import java.util.Objects;
 public class OracleJdbcTypeHandle {
     public static final String NULL_VALUE = "null";
     public static final int UNDEFINED_SCALE = -127;
-    private final int jdbcType;
+    private int jdbcType;
     private final int columnSize;
     private final int decimalDigits;
     private int scale;
@@ -68,7 +81,6 @@ public class OracleJdbcTypeHandle {
         this.precision += addPrecision;
         if(columnSize == 0) {
             precisionUndefined = true;
-            this.precision = Decimals.MAX_PRECISION;
         } else if (precision > Decimals.MAX_PRECISION) {
             precisionLimitedExceeded = true;
         }
@@ -86,6 +98,12 @@ public class OracleJdbcTypeHandle {
     @JsonProperty
     public int getJdbcType() {
         return this.jdbcType;
+    }
+
+    public OracleJdbcTypeHandle setJdbcType(int jdbcType) {
+        JDBCType.valueOf(jdbcType);
+        this.jdbcType = jdbcType;
+        return this;
     }
 
     public JDBCType getEnumType() {

@@ -36,6 +36,8 @@ public class OraclePageSourceProvider
         this.oracleRecordSetProvider = requireNonNull(oracleRecordSetProvider, "recordSetProvider is null");
     }
 
+    // TODO fix deprecated interface
+    // still used https://github.com/prestodb/presto/blob/53aceb04a712d6f9b5dfb2222376b799c85a5ce8/presto-main/src/main/java/com/facebook/presto/split/RecordPageSourceProvider.java
     @Override
     public ConnectorPageSource createPageSource(ConnectorTransactionHandle transactionHandle, ConnectorSession session, ConnectorSplit split, List<ColumnHandle> columns)
     {

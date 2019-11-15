@@ -14,19 +14,13 @@
 package com.facebook.presto.plugin.oracle;
 
 import com.facebook.presto.plugin.jdbc.*;
-import com.facebook.presto.spi.ConnectorSession;
-import com.facebook.presto.spi.PrestoException;
-import com.facebook.presto.spi.SchemaTableName;
-import com.facebook.presto.spi.StandardErrorCode;
-import com.facebook.presto.spi.type.Decimals;
+import com.facebook.presto.spi.*;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import io.airlift.log.Logger;
-import jdk.nashorn.internal.ir.annotations.Ignore;
 import oracle.jdbc.OracleDriver;
 
-import javax.annotation.Nullable;
 import javax.inject.Inject;
-import java.math.RoundingMode;
 import java.sql.*;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -34,15 +28,9 @@ import java.util.List;
 import java.util.Optional;
 
 import static com.facebook.presto.plugin.jdbc.JdbcErrorCode.JDBC_ERROR;
-import static com.facebook.presto.plugin.jdbc.StandardReadMappings.integerReadMapping;
-import static com.facebook.presto.plugin.jdbc.StandardReadMappings.jdbcTypeToPrestoType;
-import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
-import static com.facebook.presto.spi.type.DecimalType.createDecimalType;
+import static com.facebook.presto.plugin.jdbc.StandardReadMappings.*;
 import static com.facebook.presto.spi.type.VarcharType.createUnboundedVarcharType;
-import static com.facebook.presto.spi.type.VarcharType.createVarcharType;
-import static com.google.common.collect.Iterables.getOnlyElement;
-import static java.lang.Math.max;
-import static java.lang.Math.min;
+import static java.sql.ResultSetMetaData.columnNullable;
 
 /**
  * OracleClient is where the actual connection to Oracle is built
@@ -94,10 +82,12 @@ public class OracleClient
         }
 
         // Merge schema synonyms with all schema names.
-        try {
-            schemaNames.addAll(listSchemaSynonyms(connection));
-        } catch (PrestoException ex2) {
-            LOG.error(ex2);
+        if(oracleConfig.isSynonymsEnabled()) {
+            try {
+                schemaNames.addAll(listSchemaSynonyms(connection));
+            } catch (PrestoException ex2) {
+                LOG.error(ex2);
+            }
         }
         return schemaNames.build();
     }
@@ -119,37 +109,6 @@ public class OracleClient
         return schemaSynonyms.build();
     }
 
-    /**
-     * Retrieves the underlying schema and table-name for a given SCHEMA.TABLE synonym alias.
-     * Returns null if no synonym is found.
-     *
-     * @param connection
-     * @param schemaTableName
-     * @return
-     */
-    private SchemaTableName getTableSynonym(Connection connection, SchemaTableName schemaTableName) {
-        try {
-            // Find a synonym that matches the current schema/table name.
-            PreparedStatement stmt = connection.prepareStatement(QUERY_TABLE_SYNS);
-            stmt.setString(1, schemaTableName.getSchemaName());
-            stmt.setString(2, schemaTableName.getTableName());
-            ResultSet rs = stmt.executeQuery();
-            if(rs.next()) {
-                String schema = rs.getString("TABLE_OWNER");
-                String table = rs.getString("TABLE_NAME");
-                SchemaTableName toSchemaTable = new SchemaTableName(schema, table);
-                return toSchemaTable;
-            } else {
-                return null;
-            }
-        } catch (SQLException e) {
-            PrestoException ex = new PrestoException(
-                    JDBC_ERROR, String.format("Failed retrieving table synonym, query was: %s", QUERY_TABLE_SYNS));
-            ex.initCause(e);
-            throw ex;
-        }
-    }
-
     @Override
     /**
      * Retrieve information about tables/views using the JDBC Drivers DatabaseMetaData api,
@@ -168,12 +127,12 @@ public class OracleClient
                 new String[] {"TABLE", "VIEW", "SYNONYM", "GLOBAL TEMPORARY", "LOCAL TEMPORARY"});
     }
 
+    /*
     @Nullable
     @Override
     public JdbcTableHandle getTableHandle(JdbcIdentity identity, SchemaTableName schemaTableName)
     {
         try (Connection connection = connectionFactory.openConnection(identity)) {
-            // TODO needs to be replaced to include synonyms (if enabled)
             String remoteSchema = toRemoteSchemaName(identity, connection, schemaTableName.getSchemaName());
             String remoteTable = toRemoteTableName(identity, connection, remoteSchema, schemaTableName.getTableName());
 
@@ -201,11 +160,57 @@ public class OracleClient
             throw new PrestoException(JDBC_ERROR, e);
         }
     }
+     */
 
     protected String getTableSchemaName(ResultSet resultSet)
             throws SQLException
     {
         return resultSet.getString(META_DB_NAME_FIELD);
+    }
+
+    @Override
+    public List<JdbcColumnHandle> getColumns(ConnectorSession session, JdbcTableHandle tableHandle)
+    {
+        try (Connection connection = connectionFactory.openConnection(JdbcIdentity.from(session))) {
+            if(oracleConfig.isSynonymsEnabled()) {
+                ((oracle.jdbc.driver.OracleConnection) connection).setIncludeSynonyms(true);
+            }
+            try (ResultSet resultSet = getColumns(tableHandle, connection.getMetaData())) {
+                List<JdbcColumnHandle> columns = new ArrayList<>();
+                while (resultSet.next()) {
+                    JdbcTypeHandle typeHandle = new JdbcTypeHandle(
+                            resultSet.getInt("DATA_TYPE"),
+                            resultSet.getInt("COLUMN_SIZE"),
+                            resultSet.getInt("DECIMAL_DIGITS"));
+                    Optional<ReadMapping> columnMapping = toPrestoType(session, typeHandle);
+                    // skip unsupported column types
+                    if (columnMapping.isPresent()) {
+                        String columnName = resultSet.getString("COLUMN_NAME");
+                        boolean nullable = columnNullable == resultSet.getInt("NULLABLE");
+                        columns.add(new JdbcColumnHandle(connectorId, columnName, typeHandle, columnMapping.get().getType(), nullable));
+                    }
+                }
+                if (columns.isEmpty()) {
+                    // In rare cases a table might have no columns.
+                    throw new TableNotFoundException(tableHandle.getSchemaTableName());
+                }
+                return ImmutableList.copyOf(columns);
+            }
+        }
+        catch (SQLException e) {
+            throw new PrestoException(JDBC_ERROR, e);
+        }
+    }
+
+    private static ResultSet getColumns(JdbcTableHandle tableHandle, DatabaseMetaData metadata)
+            throws SQLException
+    {
+        Optional<String> escape = Optional.ofNullable(metadata.getSearchStringEscape());
+        return metadata.getColumns(
+                tableHandle.getCatalogName(),
+                escapeNamePattern(Optional.ofNullable(tableHandle.getSchemaName()), escape).orElse(null),
+                escapeNamePattern(Optional.ofNullable(tableHandle.getTableName()), escape).orElse(null),
+                null);
     }
 
     /**
@@ -224,8 +229,6 @@ public class OracleClient
     @Override
     public Optional<ReadMapping> toPrestoType(ConnectorSession session, JdbcTypeHandle typeHandle)
     {
-        // The COLUMN_SIZE column specifies the column size for the given column. For numeric data, this is the maximum precision of the column
-
         String error = "";
         OracleJdbcTypeHandle orcTypeHandle = new OracleJdbcTypeHandle(typeHandle);
 
@@ -234,6 +237,8 @@ public class OracleClient
         switch (typeHandle.getJdbcType()) {
             case Types.DATE:
                 // Oracle DATE values may store hours, minutes, and seconds, so they are mapped to TIMESTAMP in Presto.
+                // treat oracle DATE as TIMESTAMP (java.sql.Timestamp)
+                readType = Optional.of(timestampReadMapping());
                 break;
             case Types.DECIMAL:
             case Types.NUMERIC:
@@ -247,8 +252,7 @@ public class OracleClient
                 }
                 break;
             default:
-                // use standard read mappings
-                readType = jdbcTypeToPrestoType(typeHandle);
+                readType = super.toPrestoType(session, typeHandle);
         }
 
         if(!readType.isPresent()) {
