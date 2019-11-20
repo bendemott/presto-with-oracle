@@ -14,10 +14,13 @@
 package com.facebook.presto.plugin.oracle;
 
 import com.facebook.presto.plugin.jdbc.JdbcTypeHandle;
+import com.facebook.presto.spi.PrestoException;
+import com.facebook.presto.spi.StandardErrorCode;
 import com.facebook.presto.spi.type.Decimals;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.base.MoreObjects;
+import io.airlift.log.Logger;
 
 import java.sql.JDBCType;
 import java.sql.Types;
@@ -33,9 +36,10 @@ import java.util.Objects;
  *  Oracle returns -127 when scale is NULL (undefined) internally within Oracle for a DECIMAL data type.
  *
  *  For this reason we've added explicit methods to this class and use it in decimal handling code to make a complex
- *  set of options much easier to follow.
+ *  set of options much easier to read.
  */
 public class OracleJdbcTypeHandle {
+
     public static final String NULL_VALUE = "null";
     public static final int UNDEFINED_SCALE = -127;
     private int jdbcType;
@@ -46,8 +50,7 @@ public class OracleJdbcTypeHandle {
     private boolean precisionUndefined = false;
     private boolean scaleUndefined = false;
     private boolean scaleLimitExceeded = false;
-    private boolean precisionLimitedExceeded = false;
-
+    private boolean precisionLimitExceeded = false;
     /**
      *
      * @param jdbcType jdbcType (sql.Types)
@@ -55,23 +58,20 @@ public class OracleJdbcTypeHandle {
      * @param decimalDigits Decimal Digits from JDBC Driver (represents scale) can be negative
      */
     @JsonCreator
-    public OracleJdbcTypeHandle(@JsonProperty("jdbcType") int jdbcType, @JsonProperty("columnSize") int columnSize, @JsonProperty("decimalDigits") int decimalDigits) {
+    public OracleJdbcTypeHandle(@JsonProperty("jdbcType") int jdbcType, @JsonProperty("columnSize") int columnSize, @JsonProperty("decimalDigits") int decimalDigits)
+    {
         this.jdbcType = jdbcType;
         this.columnSize = columnSize;
         this.decimalDigits = decimalDigits;
         this.precision = columnSize;
         this.scale = decimalDigits;
 
-        if(jdbcType != Types.NUMERIC) {
-            return;
-        }
-
         // -- Special logic around DECIMAL SCALE ------------------------------
         int addPrecision = 0;
         if(decimalDigits == UNDEFINED_SCALE) {
             this.scaleUndefined = true;
         } else if (decimalDigits < 0) {
-            precisionLimitedExceeded = true;
+            addPrecision = Math.abs(decimalDigits);
             this.scale = 0;
         } else if(decimalDigits > Decimals.MAX_PRECISION) {
             scaleLimitExceeded = true;
@@ -79,86 +79,111 @@ public class OracleJdbcTypeHandle {
 
         // -- Special logic around DECIMAL PRECISION --------------------------
         this.precision += addPrecision;
-        if(columnSize == 0) {
+        if(columnSize == 0 && precision == 0) {
             precisionUndefined = true;
         } else if (precision > Decimals.MAX_PRECISION) {
-            precisionLimitedExceeded = true;
+            precisionLimitExceeded = true;
         }
 
     }
 
-    public OracleJdbcTypeHandle(JdbcTypeHandle handle) {
+    public OracleJdbcTypeHandle(JdbcTypeHandle handle)
+    {
         this(handle.getJdbcType(), handle.getColumnSize(), handle.getDecimalDigits());
     }
 
-    public OracleJdbcTypeHandle(OracleJdbcTypeHandle handle) {
-        this(handle.getJdbcType(), handle.getColumnSize(), handle.getDecimalDigits());
+    public OracleJdbcTypeHandle(OracleJdbcTypeHandle handle)
+    {
+        this.jdbcType = handle.getJdbcType();
+        this.columnSize = handle.getColumnSize();
+        this.decimalDigits = handle.getDecimalDigits();
+        this.precision = handle.getPrecision();
+        this.scale = handle.getScale();
+        this.precisionUndefined = isPrecisionUndefined();
+        this.precisionLimitExceeded = isPrecisionLimitExceeded();
+        this.scaleUndefined = isScaleUndefined();
+        this.scaleLimitExceeded = isScaleLimitExceeded();
     }
 
     @JsonProperty
-    public int getJdbcType() {
-        return this.jdbcType;
+    public int getJdbcType()
+    {
+        return jdbcType;
     }
 
-    public OracleJdbcTypeHandle setJdbcType(int jdbcType) {
+    public OracleJdbcTypeHandle setJdbcType(int jdbcType)
+    {
         JDBCType.valueOf(jdbcType);
         this.jdbcType = jdbcType;
         return this;
     }
 
-    public JDBCType getEnumType() {
-        return JDBCType.valueOf(this.jdbcType);
+    public JDBCType getEnumType()
+    {
+        return JDBCType.valueOf(jdbcType);
     }
 
     @JsonProperty
-    public int getColumnSize() {
-        return this.columnSize;
+    public int getColumnSize()
+    {
+        return columnSize;
     }
 
     @JsonProperty
-    public int getDecimalDigits() {
-        return this.decimalDigits;
+    public int getDecimalDigits()
+    {
+        return decimalDigits;
     }
 
-    public int getPrecision() {
-        return this.precision;
+    public int getPrecision()
+    {
+        return precision;
     }
 
-    public OracleJdbcTypeHandle setPrecision(int precision) {
+    public OracleJdbcTypeHandle setPrecision(int precision)
+    {
         this.precision = precision;
         return this;
     }
 
-    public int getScale() {
-        return this.scale;
+    public int getScale()
+    {
+        return scale;
     }
 
-    public OracleJdbcTypeHandle setScale(int scale) {
+    public OracleJdbcTypeHandle setScale(int scale)
+    {
         this.scale = scale;
         return this;
     }
 
-    public boolean isTypeLimitExceeded() {
-        return this.scaleLimitExceeded || this.precisionLimitedExceeded;
+    public boolean isTypeLimitExceeded()
+    {
+        return this.scaleLimitExceeded || this.precisionLimitExceeded;
     }
 
-    public boolean isScaleLimitExceeded() {
+    public boolean isScaleLimitExceeded()
+    {
         return this.scaleLimitExceeded;
     }
 
-    public boolean isPrecisionLimitExceeded() {
-        return this.precisionLimitedExceeded;
+    public boolean isPrecisionLimitExceeded()
+    {
+        return this.precisionLimitExceeded;
     }
 
-    public boolean isPrecisionUndefined() {
+    public boolean isPrecisionUndefined()
+    {
         return this.precisionUndefined;
     }
 
-    public boolean isScaleUndefined() {
+    public boolean isScaleUndefined()
+    {
         return this.scaleUndefined;
     }
 
-    public String getDescription() {
+    public String getDescription()
+    {
         String typeName = getTypeName();
         switch (jdbcType) {
             case Types.DECIMAL:
@@ -172,21 +197,25 @@ public class OracleJdbcTypeHandle {
         }
     }
 
-    public String getTypeName() {
+    public String getTypeName()
+    {
         return JDBCType.valueOf(jdbcType).getName();
     }
 
-    public String getPrecisionDesc() {
+    public String getPrecisionDesc()
+    {
         String precisionVal = isPrecisionUndefined() ? NULL_VALUE : Integer.toString(precision);
         String scaleVal = isScaleUndefined() ? NULL_VALUE : Integer.toString(scale);
         return String.format("%s:%s", precisionVal, scaleVal);
     }
 
-    public int hashCode() {
+    public int hashCode()
+    {
         return Objects.hash(new Object[]{this.jdbcType, this.columnSize, this.decimalDigits});
     }
 
-    public boolean equals(Object o) {
+    public boolean equals(Object o)
+    {
         if (this == o) {
             return true;
         } else if (o != null && this.getClass() == o.getClass()) {
@@ -206,7 +235,8 @@ public class OracleJdbcTypeHandle {
         }
     }
 
-    public String toString() {
+    public String toString()
+    {
         return MoreObjects.toStringHelper(this).add("jdbcType", this.jdbcType).add("columnSize", this.columnSize).add("decimalDigits", this.decimalDigits).toString();
     }
 }

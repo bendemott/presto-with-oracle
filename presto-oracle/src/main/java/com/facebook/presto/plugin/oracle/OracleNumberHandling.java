@@ -19,9 +19,12 @@ import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.StandardErrorCode;
 import com.facebook.presto.spi.type.DecimalType;
 import com.facebook.presto.spi.type.Decimals;
+import io.airlift.log.Logger;
 
 import java.sql.JDBCType;
+import java.sql.Types;
 
+import static com.google.common.base.Preconditions.checkArgument;
 import static com.facebook.presto.spi.type.DecimalType.createDecimalType;
 import static com.facebook.presto.spi.type.VarcharType.createUnboundedVarcharType;
 import static java.lang.Math.min;
@@ -37,15 +40,14 @@ import static java.lang.Math.min;
  *
  */
 public class OracleNumberHandling {
-
-    private final OracleJdbcTypeHandle typeHandle;
+    private JDBCType mapToType;
     private ReadMapping readMapping;
+    private static final Logger LOG = Logger.get(OracleNumberHandling.class);
 
     public OracleNumberHandling(OracleJdbcTypeHandle typeHandle, OracleConfig config) {
-        // is the type supported as-is
-        this.typeHandle = typeHandle;
 
-        JDBCType mapToType;
+        checkArgument(typeHandle != null, "typeHandle cannot be null");
+        checkArgument(config != null, "config cannot be null");
 
         // Map NUMBER to the default type based on
         //  oracle.number.type.default
@@ -99,26 +101,47 @@ public class OracleNumberHandling {
         // HANDLE DECIMAL READ MAPPING
         // ====================================================================
         if(mapToType.equals(JDBCType.DECIMAL)) {
+            typeHandle.setJdbcType(Types.DECIMAL); // not needed, but avoids confusion (NUMERIC) won't be shown.
             OracleJdbcTypeHandle readHandle;
+            LOG.info("====> HANDLING DECIMAL %s", typeHandle.getDescription());
 
             // if there is a mapping to an explicit (precision:scale) pair use it
             //    from "oracle.number.decimal.precision-map"
             readHandle = config.getNumberDecimalPrecisionMap().getOrDefault(typeHandle, null);
 
+            // If the scale exceeds precision, or precision is undefined, or the precision exceeds the max
+            // set the precision to the Maximum allowed precision
+            if(readHandle == null && (typeHandle.getScale() >= typeHandle.getPrecision()
+                    || typeHandle.isPrecisionUndefined()
+                    || typeHandle.isTypeLimitExceeded())) {
+                typeHandle.setPrecision(Decimals.MAX_PRECISION);
+                LOG.info("=====> SETTING precision = MAX_PRECISION %s", typeHandle.getDescription());
+            } else {
+                LOG.info("=====> NOT SETTING precision ... %s", typeHandle.getDescription());
+            }
+
             // if the scale is undefined (-127) or exceeds max precision...
             // use one of two configuration options to decide what to do
             //    "oracle.number.decimal.default-scale.fixed"
             //    "oracle.number.decimal.default-scale.ratio"
-            if(readHandle == null && (typeHandle.isScaleUndefined() || typeHandle.getScale() > Decimals.MAX_PRECISION)) {
+            if(readHandle == null && (typeHandle.isScaleUndefined() || typeHandle.isScaleLimitExceeded())) {
+                LOG.info("====> readHandle == null && (isScaleUndefined || isScaleLimitExceeded)");
+                // If a fixed-scale is configured, apply the fixed scale.
                 if(config.getNumberDecimalDefaultScaleFixed() != OracleConfig.UNDEFINED_SCALE) {
                     int scale = config.getNumberDecimalDefaultScaleFixed();
                     readHandle = new OracleJdbcTypeHandle(typeHandle);
                     readHandle.setScale(scale);
-                } else if(config.getNumberDecimalDefaultScaleRatio() != OracleConfig.UNDEFINED_SCALE) {
+                    LOG.info("====> getNumberDecimalDefaultScaleFixed() %s", scale);
+                // if a ratio-scale is configured, apply the ratio scale
+                } else if(config.getNumberDecimalDefaultScaleRatio() != (float) OracleConfig.UNDEFINED_SCALE) {
                     float ratio = config.getNumberDecimalDefaultScaleRatio();
-                    int scale = (int) ((float) min(typeHandle.getPrecision(), Decimals.MAX_PRECISION) * ratio);
+                    if(typeHandle.isPrecisionUndefined()) {
+
+                    }
+                    int scale = (int) (ratio * (float) min(typeHandle.getPrecision(), Decimals.MAX_PRECISION));
                     readHandle = new OracleJdbcTypeHandle(typeHandle);
                     readHandle.setScale(scale);
+                    LOG.info("====> getNumberDecimalDefaultScaleRatio() %s", scale);
                 } else {
                     throw new PrestoException(
                             StandardErrorCode.GENERIC_INTERNAL_ERROR,
@@ -127,48 +150,41 @@ public class OracleNumberHandling {
                                     "'oracle.number.decimal.default-scale.ratio' or " +
                                     "'oracle.number.decimal.precision-map'", typeHandle.getDescription()));
                 }
-            }
-
-
-            // If the scale exceeds precision, or precision is undefined, or the precision exceeds the max
-            // set the precision to the Maximum allowed precision
-            if(readHandle.getScale() >= readHandle.getPrecision()
-                    || typeHandle.isPrecisionUndefined()
-                    || typeHandle.isPrecisionLimitExceeded()) {
-                readHandle.setPrecision(Decimals.MAX_PRECISION);
+            } else if(readHandle == null) {
+                readHandle = new OracleJdbcTypeHandle(typeHandle);
+                LOG.info("====> setting readHandle (null) %s %s", typeHandle.getDescription(), readHandle.getDescription());
             }
 
             DecimalType prestoDecimal = createDecimalType(readHandle.getPrecision(), readHandle.getScale());
+            LOG.info("====> prestoDecimal %s", readHandle.getDescription());
             if(typeHandle.isTypeLimitExceeded() || typeHandle.isPrecisionUndefined() || typeHandle.isScaleUndefined()) {
                 // if the type exceeds limits, or is undefined in precision or scale, we might have to round.
                 // so return the rounding version of the read function
-                readMapping = OracleReadMappings.roundDecimalPrecisionAndScale(prestoDecimal, config.getNumberDecimalRoundMode());
+                LOG.info("====> roundDecimalReadMapping");
+                readMapping = OracleReadMappings.roundDecimalReadMapping(prestoDecimal, config.getNumberDecimalRoundMode());
             } else {
                 // if the type is well-defined and falls within our limits, Presto's default read function can be used
+                LOG.info("====> decimalReadMapping");
                 readMapping = StandardReadMappings.decimalReadMapping(prestoDecimal);
             }
-            return;
         }
 
         // HANDLE INTEGER READ MAPPING
         // ====================================================================
         else if(mapToType.equals(JDBCType.INTEGER)) {
             readMapping = StandardReadMappings.integerReadMapping();
-            return;
         }
 
         // HANDLE DOUBLE READ MAPPING
         // ====================================================================
         else if(mapToType.equals(JDBCType.DOUBLE)) {
             readMapping = StandardReadMappings.doubleReadMapping();
-            return;
         }
 
         // HANDLE VARCHAR READ MAPPING
         // ====================================================================
         else if(mapToType.equals(JDBCType.VARCHAR)) {
             readMapping = OracleReadMappings.decimalVarcharReadMapping(createUnboundedVarcharType());
-            return;
         }
 
         // NO READ MAPPING MATCHED
@@ -178,6 +194,14 @@ public class OracleNumberHandling {
                     StandardErrorCode.GENERIC_INTERNAL_ERROR,
                     String.format("unsupported type %s, for NumberHandling", typeHandle.getDescription()));
         }
+    }
+
+    /**
+     * Get the JDBCType that the value will be mapped to based on configuration.
+     * @return
+     */
+    JDBCType getMapToType() {
+        return mapToType;
     }
 
     /**

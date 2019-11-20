@@ -13,40 +13,20 @@
  */
 package com.facebook.presto.plugin.oracle;
 
-import com.facebook.presto.plugin.jdbc.JdbcClient;
-import com.facebook.presto.plugin.jdbc.JdbcColumnHandle;
-import com.facebook.presto.plugin.jdbc.JdbcSplit;
+import com.facebook.presto.plugin.jdbc.*;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.RecordCursor;
-import com.facebook.presto.spi.type.BigintType;
-import com.facebook.presto.spi.type.CharType;
-import com.facebook.presto.spi.type.DateType;
-import com.facebook.presto.spi.type.DecimalType;
-import com.facebook.presto.spi.type.IntegerType;
-import com.facebook.presto.spi.type.RealType;
-import com.facebook.presto.spi.type.SmallintType;
-import com.facebook.presto.spi.type.TimeType;
-import com.facebook.presto.spi.type.TimestampType;
-import com.facebook.presto.spi.type.TinyintType;
-import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.spi.type.VarbinaryType;
-import com.facebook.presto.spi.type.VarcharType;
+import com.facebook.presto.spi.type.*;
 import com.google.common.base.CharMatcher;
 import com.google.common.base.Throwables;
-import com.facebook.presto.plugin.jdbc.JdbcIdentity;
 import com.google.common.collect.ImmutableList;
 import com.facebook.presto.spi.ConnectorSession;
 import io.airlift.slice.Slice;
 import org.joda.time.chrono.ISOChronology;
 
 import java.math.BigDecimal;
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.sql.Statement;
-import java.sql.Time;
-import java.sql.Timestamp;
+import java.math.RoundingMode;
+import java.sql.*;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -59,6 +39,7 @@ import static io.airlift.slice.Slices.wrappedBuffer;
 import static java.lang.Float.floatToRawIntBits;
 import static java.util.Objects.requireNonNull;
 import static org.joda.time.DateTimeZone.UTC;
+import static java.lang.Math.min;
 
 public class OracleRecordCursor
         implements RecordCursor
@@ -215,7 +196,35 @@ public class OracleRecordCursor
             }
             if (type instanceof DecimalType) {
                 // long decimal type
+                // TODO
+                /*
+java.lang.ArithmeticException: Decimal overflow
+        at com.facebook.presto.spi.type.UnscaledDecimal128Arithmetic.throwOverflowException(UnscaledDecimal128Arithmetic.java:1650)
+        at com.facebook.presto.spi.type.UnscaledDecimal128Arithmetic.pack(UnscaledDecimal128Arithmetic.java:154)
+        at com.facebook.presto.spi.type.UnscaledDecimal128Arithmetic.unscaledDecimal(UnscaledDecimal128Arithmetic.java:144)
+        at com.facebook.presto.spi.type.Decimals.encodeUnscaledValue(Decimals.java:144)
+        at com.facebook.presto.spi.type.Decimals.encodeScaledValue(Decimals.java:170)
+        at com.facebook.presto.plugin.oracle.OracleRecordCursor.getSlice(OracleRecordCursor.java:219)
+        at com.facebook.presto.plugin.oracle.OraclePageSource.getNextPage(OraclePageSource.java:183)
+        at com.facebook.presto.operator.TableScanOperator.getOutput(TableScanOperator.java:250)
+        at com.facebook.presto.operator.Driver.processInternal(Driver.java:379)
+        at com.facebook.presto.operator.Driver.lambda$processFor$8(Driver.java:283)
+        at com.facebook.presto.operator.Driver.tryWithLock(Driver.java:675)
+        at com.facebook.presto.operator.Driver.processFor(Driver.java:276)
+        at com.facebook.presto.execution.SqlTaskExecution$DriverSplitRunner.processFor(SqlTaskExecution.java:1077)
+        at com.facebook.presto.execution.executor.PrioritizedSplitRunner.process(PrioritizedSplitRunner.java:162)
+        at com.facebook.presto.execution.executor.TaskExecutor$TaskRunner.run(TaskExecutor.java:483)
+        at com.facebook.presto.$gen.Presto_0_225_9e57310____20191115_180708_1.run(Unknown Source)
+        at java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1149)
+        at java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:624)
+        at java.lang.Thread.run(Thread.java:748)
+                 */
                 BigDecimal bigDecimal = resultSet.getBigDecimal(field + 1);
+                if(bigDecimal != null && bigDecimal.precision() > Decimals.MAX_PRECISION) {
+                    int scale = min(bigDecimal.scale(), 8); // TODO 8 is arbitrary
+                    bigDecimal = bigDecimal.setScale(scale, RoundingMode.UP);
+                }
+
                 return bigDecimal == null ? null : encodeScaledValue(bigDecimal);
             }
             throw new PrestoException(GENERIC_INTERNAL_ERROR, "Unhandled type for slice: " + type.getTypeSignature());

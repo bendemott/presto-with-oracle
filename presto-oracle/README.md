@@ -13,6 +13,11 @@ oracle.connection-timeout=10
 oracle.max-reconnects=3
 ```
 
+# Features
+- (Optional) Oracle Synonym support via `oracle.synonyms.enabled=true`
+- Correct handling of Oracle `NUMBER` type, including many special options
+- Correct handling of Oracle `DATE` type
+
 Rounding Mode can be one of ``UP, DOWN, CEILING, FLOOR, HALF_UP, HALF_DOWN, HALF_EVEN, UNNECESSARY``
 If set to ``UNNECESSARY`` no rounding will be performed.
 
@@ -23,23 +28,14 @@ You can override which class is used for the class check by specifying the java 
 
 # Issues
 - Predicate Pushdown not working?
-- Handling of Rounding / Out of Bounds numeric
+- user synonyms work, but synonyms through a grant do not
+- 
 
 # Planned Features
-- Oracle Synonym Support
-- Oracle "NUMBER" support
 - Connection Pooling Support
 - Histogram / Analysis support
 - Multi-Threading
 
-# Notes
-```
-OraclePlugin is the "plugin" class provided to the Presto SPI and is where the plugin name "oracle" is specified
-OracleConnectionFactory is the entry point for accessing the oracle libraries during plugin loading.
-  it also checks to ensure that the Oracle Plugin has been loaded and logs the version of the jar loaded.
-OracleClient is where the OracleDriver is referenced, and calls into DriverConnectionFactory
-DriverConnectionFactory is where the connection is actually made
-```
 
 # Config
 

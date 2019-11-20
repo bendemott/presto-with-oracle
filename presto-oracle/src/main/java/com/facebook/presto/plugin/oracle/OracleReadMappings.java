@@ -17,6 +17,8 @@ import com.facebook.presto.spi.type.VarcharType;
 import com.facebook.presto.plugin.jdbc.ReadMapping;
 import com.facebook.presto.spi.type.DecimalType;
 import com.facebook.presto.spi.type.Decimals;
+import io.airlift.log.Logger;
+
 import static io.airlift.slice.Slices.utf8Slice;
 
 import java.math.BigDecimal;
@@ -30,7 +32,7 @@ import java.math.RoundingMode;
  * This logic is used in OracleClient.java
  */
 public class OracleReadMappings {
-
+    private static final Logger LOG = Logger.get(OracleClient.class);
     /**
      * ReadMapping that rounds decimals and sets PRECISION and SCALE explicitly.
      *
@@ -41,13 +43,21 @@ public class OracleReadMappings {
      * @param round
      * @return
      */
-    public static ReadMapping roundDecimalPrecisionAndScale(DecimalType decimalType, RoundingMode round) {
+    public static ReadMapping roundDecimalReadMapping(DecimalType decimalType, RoundingMode round) {
         return ReadMapping.sliceReadMapping(decimalType, (resultSet, columnIndex) -> {
             int scale = decimalType.getScale();
-            BigDecimal roundDec = resultSet.getBigDecimal(columnIndex);
-            roundDec = roundDec.setScale(scale, round);
-            //roundDec = roundDec.round(new MathContext(roundDec.precision(), round));
-            return Decimals.encodeScaledValue(roundDec, scale);
+            BigDecimal value = resultSet.getBigDecimal(columnIndex);
+            String rawValue = resultSet.getString(columnIndex);
+            BigDecimal dec = new BigDecimal(rawValue, new MathContext(decimalType.getPrecision(), round));
+            dec = dec.setScale(scale, round);
+            BigDecimal roundDec = value.setScale(scale, round);
+            LOG.info("====> roundDecimal - TYPE: %s", decimalType);
+            LOG.info("====> roundDecimal - RAW: %s", rawValue);
+            LOG.info("====> roundDecimal - DEC0:%s DEC1:%s", dec, dec.setScale(scale, round));
+            LOG.info("====> roundDecimal - ORIG:%s ROUND:%s", value, roundDec);
+
+            return Decimals.encodeUnscaledValue(dec.unscaledValue());
+            //return Decimals.encodeScaledValue(dec, scale);
         });
     }
 

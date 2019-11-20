@@ -184,6 +184,13 @@
             <scope>test</scope>
             <version>5.7.22-1</version>
         </dependency>
+
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-all</artifactId>
+            <scope>test</scope>
+            <version>1.10.19</version>
+        </dependency>
     </dependencies>
 
     <build>
@@ -229,6 +236,7 @@
                         <artifactId>maven-surefire-plugin</artifactId>
                         <configuration>
                             <excludes combine.self="override" />
+                            <trimStackTrace>false</trimStackTrace>
                         </configuration>
                     </plugin>
                 </plugins>

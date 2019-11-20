@@ -142,6 +142,11 @@ public class OraclePageSource
                                 type.writeLong(output, (Long) object);
                             }
                             if (type.equals(IntegerType.INTEGER)) {
+                                // TODO support numeric type conversion everywhere
+                                if(object instanceof BigDecimal) {
+                                    BigDecimal big = (BigDecimal) object;
+                                    object = big.longValue();
+                                }
                                 type.writeLong(output, (Long) object);
                             }
                             if (type.equals(RealType.REAL)) {

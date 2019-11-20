@@ -15,6 +15,7 @@ package com.facebook.presto.plugin.oracle;
 
 import com.facebook.presto.plugin.jdbc.*;
 import com.facebook.presto.spi.*;
+import com.facebook.presto.spi.type.Type;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import io.airlift.log.Logger;
@@ -242,14 +243,21 @@ public class OracleClient
                 break;
             case Types.DECIMAL:
             case Types.NUMERIC:
+                LOG.info("PRESTO-TYPE_HANDLE %s(%d, %d)", JDBCType.valueOf(typeHandle.getJdbcType()), typeHandle.getColumnSize(), typeHandle.getDecimalDigits());
+                LOG.info("ORACLE-TYPE_HANDLE %s", orcTypeHandle.getDescription());
+                LOG.info("ORACLE-SCALE-UNDEFINED %s", orcTypeHandle.isScaleUndefined());
                 try {
                     OracleNumberHandling numberHandling = new OracleNumberHandling(orcTypeHandle, this.oracleConfig);
                     readType = Optional.of(numberHandling.getReadMapping());
+                    Type prestoType = readType.get().getType();
+                    LOG.info("ORACLE-READ_TYPE %s", prestoType);
+
                 } catch (IgnoreFieldException ex) {
                     return Optional.empty(); // skip field
                 } catch (PrestoException ex) {
                     error  = ex.toString();
                 }
+                LOG.info("------------------------------------------------");
                 break;
             default:
                 readType = super.toPrestoType(session, typeHandle);
