@@ -43,11 +43,16 @@ import static java.util.Collections.unmodifiableList;
 import static java.util.Objects.requireNonNull;
 import static org.joda.time.DateTimeZone.UTC;
 
+// https://github.com/prestodb/presto/blob/release-0.225/presto-spi/src/main/java/com/facebook/presto/spi/ConnectorPageSource.java
+
+/**
+ * OraclePageSource
+ */
 public class OraclePageSource
         implements ConnectorPageSource
 {
     private static final int ROWS_PER_REQUEST = 4096;
-    private final RecordCursor cursor;
+    private final OracleRecordCursor cursor;
     private final List<Type> types;
     private final PageBuilder pageBuilder;
     private boolean closed;
@@ -59,7 +64,7 @@ public class OraclePageSource
 
     public OraclePageSource(List<Type> types, RecordCursor cursor)
     {
-        this.cursor = requireNonNull(cursor, "cursor is null");
+        this.cursor = (OracleRecordCursor)requireNonNull(cursor, "cursor is null");
         this.types = unmodifiableList(new ArrayList<>(requireNonNull(types, "types is null")));
         this.pageBuilder = new PageBuilder(this.types);
     }
@@ -100,6 +105,10 @@ public class OraclePageSource
         return closed && pageBuilder.isEmpty();
     }
 
+    /**
+     * Because we have custom read functions, the JDBC Driver tpye returned may be different than
+     * @return
+     */
     @Override
     public Page getNextPage()
     {
@@ -118,82 +127,26 @@ public class OraclePageSource
                 pageBuilder.declarePosition();
                 for (int column = 0; column < types.size(); column++) {
                     BlockBuilder output = pageBuilder.getBlockBuilder(column);
+                    if (cursor.isNull(column)) {
+                        output.appendNull();
+                        continue;
+                    }
+
+                    // type is the Presto Type from the JdbcTypeHandle
+                    // getJavaType() is the return type
                     Type type = types.get(column);
                     Class<?> javaType = type.getJavaType();
+
                     if (javaType == boolean.class) {
-                        Object object = cursor.getObject(column);
-                        if (object == null) {
-                            output.appendNull();
-                        }
-                        else {
-                            type.writeBoolean(output, (Boolean) object);
-                        }
-                    }
-                    else if (javaType == long.class) {
-                        Object object = cursor.getObject(column);
-                        if (object == null) {
-                            output.appendNull();
-                        }
-                        else {
-                            if (type.equals(TinyintType.TINYINT)) {
-                                type.writeLong(output, (Long) object);
-                            }
-                            if (type.equals(SmallintType.SMALLINT)) {
-                                type.writeLong(output, (Long) object);
-                            }
-                            if (type.equals(IntegerType.INTEGER)) {
-                                // TODO support numeric type conversion everywhere
-                                if(object instanceof BigDecimal) {
-                                    BigDecimal big = (BigDecimal) object;
-                                    object = big.longValue();
-                                }
-                                type.writeLong(output, (Long) object);
-                            }
-                            if (type.equals(RealType.REAL)) {
-                                type.writeLong(output, Float.floatToRawIntBits((Float) object));
-                            }
-                            if (type.equals(BigintType.BIGINT)) {
-                                type.writeLong(output, (Long) object);
-                            }
-                            if (type instanceof DecimalType) {
-                                // short decimal type
-                                type.writeLong(output, ((BigDecimal) object).unscaledValue().longValueExact());
-                            }
-                            if (type.equals(DateType.DATE)) {
-                                // JDBC returns a date using a timestamp at midnight in the JVM timezone
-                                long localMillis = ((Date) object).getTime();
-                                // Convert it to a midnight in UTC
-                                long utcMillis = ISOChronology.getInstance().getZone().getMillisKeepLocal(UTC, localMillis);
-                                // convert to days
-                                type.writeLong(output, TimeUnit.MILLISECONDS.toDays(utcMillis));
-                            }
-                            if (type.equals(TimeType.TIME)) {
-                                type.writeLong(output, ISOChronology.getInstanceUTC().millisOfDay().get((Long) object));
-                            }
-                            if (type.equals(TimestampType.TIMESTAMP)) {
-                                type.writeLong(output, ((Timestamp) object).getTime());
-                            }
-                        }
-                    }
-                    else if (javaType == double.class) {
-                        Object object = cursor.getObject(column);
-                        if (object == null) {
-                            output.appendNull();
-                        }
-                        else {
-                            type.writeDouble(output, (Double) object);
-                        }
-                    }
-                    else if (javaType == Slice.class) {
+                        type.writeBoolean(output, cursor.getBoolean(column));
+                    } else if (javaType == long.class) {
+                        type.writeLong(output, cursor.getLong(column));
+                    } else if (javaType == double.class) {
+                        type.writeDouble(output, cursor.getDouble(column));
+                    } else if (javaType == Slice.class) {
                         Slice slice = cursor.getSlice(column);
-                        if (slice == null) {
-                            output.appendNull();
-                        }
-                        else {
-                            type.writeSlice(output, slice, 0, slice.length());
-                        }
-                    }
-                    else {
+                        type.writeSlice(output, slice, 0, slice.length());
+                    } else {
                         type.writeObject(output, cursor.getObject(column));
                     }
                 }

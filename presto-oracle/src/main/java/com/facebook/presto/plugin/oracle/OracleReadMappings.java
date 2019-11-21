@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.plugin.oracle;
 
+import com.facebook.presto.spi.type.DoubleType;
 import com.facebook.presto.spi.type.VarcharType;
 import com.facebook.presto.plugin.jdbc.ReadMapping;
 import com.facebook.presto.spi.type.DecimalType;
@@ -22,17 +23,16 @@ import io.airlift.log.Logger;
 import static io.airlift.slice.Slices.utf8Slice;
 
 import java.math.BigDecimal;
-import java.math.MathContext;
 import java.math.RoundingMode;
+import java.util.Objects;
 
 /**
  * Methods that deal with Oracle specific functionality around ReadMappings.
  * ReadMappings are methods returned to Presto to convert data types for specific columns in a JDBC result set.
  * These methods convert JDBC types to Presto supported types.
- * This logic is used in OracleClient.java
+ * This logic is used in OracleNumberHandling.java
  */
 public class OracleReadMappings {
-    private static final Logger LOG = Logger.get(OracleClient.class);
     /**
      * ReadMapping that rounds decimals and sets PRECISION and SCALE explicitly.
      *
@@ -44,20 +44,34 @@ public class OracleReadMappings {
      * @return
      */
     public static ReadMapping roundDecimalReadMapping(DecimalType decimalType, RoundingMode round) {
+        Objects.requireNonNull(decimalType, "decimalType is null");
+        Objects.requireNonNull(round, "round is null");
         return ReadMapping.sliceReadMapping(decimalType, (resultSet, columnIndex) -> {
             int scale = decimalType.getScale();
-            BigDecimal value = resultSet.getBigDecimal(columnIndex);
-            String rawValue = resultSet.getString(columnIndex);
-            BigDecimal dec = new BigDecimal(rawValue, new MathContext(decimalType.getPrecision(), round));
-            dec = dec.setScale(scale, round);
-            BigDecimal roundDec = value.setScale(scale, round);
-            LOG.info("====> roundDecimal - TYPE: %s", decimalType);
-            LOG.info("====> roundDecimal - RAW: %s", rawValue);
-            LOG.info("====> roundDecimal - DEC0:%s DEC1:%s", dec, dec.setScale(scale, round));
-            LOG.info("====> roundDecimal - ORIG:%s ROUND:%s", value, roundDec);
+            BigDecimal dec = resultSet.getBigDecimal(columnIndex);
+            // if value is null, return null
+            if(dec == null) { return null; }
 
+            // round will add zeros, or truncate by rounding to ensure the digits to the right of the decimal
+            // are filled to exactly SCALE digits.
+            dec = dec.setScale(scale, round);
             return Decimals.encodeUnscaledValue(dec.unscaledValue());
-            //return Decimals.encodeScaledValue(dec, scale);
+        });
+    }
+
+    /**
+     * Return a Double rounded to the desired scale
+     *
+     * @param scale
+     * @param round
+     * @return
+     */
+    public static ReadMapping roundDoubleReadMapping(int scale, RoundingMode round) {
+        Objects.requireNonNull(round, "round is null");
+        return ReadMapping.doubleReadMapping(DoubleType.DOUBLE, (resultSet, columnIndex) -> {
+            BigDecimal value = resultSet.getBigDecimal(columnIndex);
+            value = value.setScale(scale, round); // round to ensure the decimal value will fit in a double
+            return value.doubleValue();
         });
     }
 
@@ -69,8 +83,9 @@ public class OracleReadMappings {
      */
     public static ReadMapping decimalVarcharReadMapping(VarcharType varcharType) {
         return ReadMapping.sliceReadMapping(varcharType, (resultSet, columnIndex) -> {
-            String stringDec = resultSet.getBigDecimal(columnIndex).toString();
-            return utf8Slice(stringDec);
+            BigDecimal dec = resultSet.getBigDecimal(columnIndex);
+            if(dec == null) { return null; }
+            return utf8Slice(dec.toString());
         });
     }
 }

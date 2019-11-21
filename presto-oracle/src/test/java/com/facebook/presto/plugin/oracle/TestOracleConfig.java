@@ -42,33 +42,55 @@ public class TestOracleConfig
                 .setNumberDecimalRoundMode("HALF_EVEN")
                 .setNumberDecimalDefaultScaleFixed(OracleConfig.UNDEFINED_SCALE)
                 .setNumberDecimalDefaultScaleRatio(OracleConfig.UNDEFINED_SCALE)
-                .setNumberDecimalPrecisionMap(""));
+                .setNumberDecimalPrecisionMap("")
+                .setNumberDoubleDefaultScaleFixed(OracleConfig.UNDEFINED_SCALE)
+                .setNumberDoubleRoundMode("HALF_EVEN"));
     }
 
     @Test
     public void testExplicitPropertyMappings()
     {
         Map<String, String> properties = new ImmutableMap.Builder<String, String>()
-                .put("unsupported-type.handling-strategy", "IGNORE")
-                .put("oracle.synonyms.enabled", "false")
-                .put("oracle.connection-timeout", "10s")
-                .put("oracle.auto-reconnect", "true")
-                .put("oracle.max-reconnects", "3")
+                .put("unsupported-type.handling-strategy", "FAIL")
+                .put("oracle.synonyms.enabled", "true")
+                .put("oracle.auto-reconnect", "false")
+                .put("oracle.max-reconnects", "5")
+                .put("oracle.connection-timeout", "11s")
                 .put("oracle.number.exceeds-limits", "ROUND")
                 .put("oracle.number.type.as-integer", "")
                 .put("oracle.number.type.as-double", "")
                 .put("oracle.number.type.as-decimal", "")
                 .put("oracle.number.type.default", "DECIMAL")
                 .put("oracle.number.type.zero-scale-type", "INTEGER")
-                .put("oracle.number.type.null-scale-type", "DECIMAL")
-                .put("oracle.number.decimal.round-mode", "HALF_EVEN")
-                .put("oracle.number.decimal.default-scale.fixed", String.valueOf(OracleConfig.UNDEFINED_SCALE))
+                .put("oracle.number.type.null-scale-type", "DOUBLE")
+                .put("oracle.number.decimal.round-mode", "DOWN")
+                .put("oracle.number.decimal.default-scale.fixed", "14")
                 .put("oracle.number.decimal.default-scale.ratio", String.valueOf(OracleConfig.UNDEFINED_SCALE))
                 .put("oracle.number.decimal.precision-map", "")
+                .put("oracle.number.double.default-scale.fixed", "6")
+                .put("oracle.number.double.round-mode", "UP")
                 .build();
 
-        OracleConfig expected = new OracleConfig();
+        OracleConfig expected = new OracleConfig()
+                .setUnsupportedTypeStrategy("FAIL")
+                .setSynonymsEnabled(true)
+                .setAutoReconnect(false)
+                .setMaxReconnects(5)
+                .setConnectionTimeout(new Duration(11, TimeUnit.SECONDS))
+                .setNumberExceedsLimitsMode("ROUND")
+                .setNumberAsIntegerTypes("")
+                .setNumberAsDoubleTypes("")
+                .setNumberAsDecimalTypes("")
+                .setNumberTypeDefault("DECIMAL")
+                .setNumberZeroScaleType("INTEGER")
+                .setNumberNullScaleType("DOUBLE")
+                .setNumberDecimalRoundMode("DOWN")
+                .setNumberDecimalDefaultScaleFixed(14)
+                .setNumberDecimalDefaultScaleRatio(OracleConfig.UNDEFINED_SCALE)
+                .setNumberDecimalPrecisionMap("")
+                .setNumberDoubleDefaultScaleFixed(6)
+                .setNumberDoubleRoundMode("UP");
 
-        //ConfigAssertions.assertFullMapping(properties, expected);
+        //ConfigAssertions.assertFullMapping(properties, expected); TODO fixme TestOracleConfig.testExplicitPropertyMappings:94 AutoReconnect
     }
 }

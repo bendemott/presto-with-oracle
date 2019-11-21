@@ -31,8 +31,8 @@ public class OracleConfig
 {
     public static final JDBCType UNDEFINED_TYPE = JDBCType.OTHER;
     public static final int UNDEFINED_SCALE = OracleJdbcTypeHandle.UNDEFINED_SCALE;
-    private static final JDBCType[] ALLOWED_NUMBER_DEFAULT_TYPES = {JDBCType.DECIMAL, JDBCType.DOUBLE, JDBCType.INTEGER};
-
+    private static final JDBCType[] ALLOWED_NUMBER_DEFAULT_TYPES = {JDBCType.DECIMAL, JDBCType.DOUBLE, JDBCType.INTEGER, JDBCType.VARCHAR};
+    private static final int MAX_DOUBLE_PRECISION = 15;
     private boolean synonymsEnabled = false;
     private UnsupportedTypeHandling typeStrategy = UnsupportedTypeHandling.IGNORE;
     private boolean autoReconnect = true;
@@ -49,6 +49,8 @@ public class OracleConfig
     private int numberDecimalDefaultScaleFixed = UNDEFINED_SCALE;
     private float numberDecimalDefaultScaleRatio = UNDEFINED_SCALE;
     private Map<OracleJdbcTypeHandle, OracleJdbcTypeHandle> numberDecimalPrecisionMap = new HashMap<>();
+    private RoundingMode numberDoubleRoundMode = RoundingMode.HALF_EVEN;
+    private int numberDoubleDefaultScaleFixed = UNDEFINED_SCALE;
 
     public boolean isSynonymsEnabled()
     {
@@ -408,9 +410,69 @@ public class OracleConfig
             return this;
         }
         return this;
-        // TODO
+        // TODO implement this
         //throw new PrestoException(CONFIGURATION_INVALID, "NOT IMPLEMENTED YET");
         //return this;
+    }
+
+    // ------------------------------------------------------------------------
+    // -- oracle.number.double fields -----------------------------------------
+
+    /** Get oracle.number.double.round-mode */
+    public RoundingMode getNumberDoubleRoundMode()
+    {
+        if(getNumberExceedsLimitsMode().equals(UnsupportedTypeHandling.ROUND)
+                && numberDecimalRoundMode.equals(RoundingMode.UNNECESSARY)) {
+            throw new PrestoException(CONFIGURATION_INVALID, "'oracle.number.decimal.round-mode' must be set " +
+                    "if 'oracle.number.exceeds-limits' is set to ROUND");
+        }
+        return numberDoubleRoundMode;
+    }
+
+    /**
+     * When "oracle.number.exceeds-limits" is set to "ROUND" this must be set to a value other than UNNECESSARY.
+     * This determines the method of rounding to conform values to Presto data type limits.
+     *
+     * @param roundingMode
+     * @return
+     */
+    @Config("oracle.number.double.round-mode")
+    public OracleConfig setNumberDoubleRoundMode(String roundingMode)
+    {
+        this.numberDoubleRoundMode = RoundingMode.valueOf(roundingMode);
+        return this;
+    }
+
+    // ------------------------------------------------------------------------
+
+    /** Get oracle.number.double.default-scale.fixed */
+    public int getNumberDoubleDefaultScaleFixed()
+    {
+        return numberDoubleDefaultScaleFixed;
+    }
+
+    /**
+     * When NUMBER type scale is NULL and conversion to DECIMAL is set,
+     * EXPLICITLY set the scale to a fixed integer value.
+     *
+     * Note that scale cannot exceed Prestos maximum precision of 38
+     *
+     * @param doubleScale
+     * @return
+     */
+    @Config("oracle.number.double.default-scale.fixed")
+    public OracleConfig setNumberDoubleDefaultScaleFixed(int doubleScale)
+    {
+        if(doubleScale == UNDEFINED_SCALE) {
+            this.numberDoubleDefaultScaleFixed = UNDEFINED_SCALE;
+            return this;
+        }
+        if(doubleScale > MAX_DOUBLE_PRECISION) {
+            String msg = String.format("oracle.number.double.default-scale.fixed (%d) exceeds javas Double type max: %d", doubleScale, MAX_DOUBLE_PRECISION);
+            throw new PrestoException(CONFIGURATION_INVALID, msg);
+        }
+        this.numberDoubleDefaultScaleFixed = doubleScale;
+        return this;
     }
 
     // ------------------------------------------------------------------------
@@ -437,7 +499,7 @@ public class OracleConfig
         return jdbcType;
     }
 
-    public boolean isDefaultScaleConfigured() {
+    public boolean isDecimalDefaultScaleConfigured() {
         return (getNumberDecimalDefaultScaleFixed() != UNDEFINED_SCALE ||
                 getNumberDecimalDefaultScaleRatio() != UNDEFINED_SCALE);
     }

@@ -25,6 +25,7 @@ import java.util.List;
 
 import static java.util.Objects.requireNonNull;
 
+// https://github.com/prestodb/presto/blob/release-0.225/presto-spi/src/main/java/com/facebook/presto/spi/connector/ConnectorPageSourceProvider.java
 public class OraclePageSourceProvider
         implements ConnectorPageSourceProvider
 {

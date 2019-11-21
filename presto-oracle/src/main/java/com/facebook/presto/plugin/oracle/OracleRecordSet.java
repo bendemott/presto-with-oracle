@@ -26,6 +26,12 @@ import java.util.List;
 
 import static java.util.Objects.requireNonNull;
 
+/**
+ * OracleRecordSet
+ *
+ * justification:
+ *  Needed to return a custom OracleRecordCursor
+ */
 public class OracleRecordSet
         implements RecordSet
 {
