@@ -26,6 +26,7 @@ import java.sql.SQLException;
 
 import static com.facebook.presto.spi.type.DecimalType.createDecimalType;
 import static com.facebook.presto.spi.type.Decimals.encodeScaledValue;
+import static com.facebook.presto.spi.type.Decimals.encodeUnscaledValue;
 import static com.facebook.presto.spi.type.UnscaledDecimal128Arithmetic.unscaledDecimalToBigInteger;
 import static java.lang.String.format;
 import static org.testng.Assert.*;
@@ -34,7 +35,7 @@ public class TestOracleReadMappings
 {
     private DecimalType dec2Scale = createDecimalType(Decimals.MAX_PRECISION, 2);
     private DecimalType dec8Scale = createDecimalType(Decimals.MAX_PRECISION, 8);
-    private DecimalType dec14Scale = createDecimalType(Decimals.MAX_PRECISION, 14);
+    private DecimalType dec15Scale = createDecimalType(Decimals.MAX_PRECISION, 15);
 
     @Test void testType()
     {
@@ -46,10 +47,10 @@ public class TestOracleReadMappings
     {
         ReadMapping roundDecimal2 = OracleReadMappings.roundDecimalReadMapping(dec2Scale, RoundingMode.UP);
         ReadMapping roundDecimal8 = OracleReadMappings.roundDecimalReadMapping(dec8Scale, RoundingMode.UP);
-        ReadMapping roundDecimal14 = OracleReadMappings.roundDecimalReadMapping(dec8Scale, RoundingMode.UP);
+        ReadMapping roundDecimal15 = OracleReadMappings.roundDecimalReadMapping(dec15Scale, RoundingMode.UP);
 
         assertSliceReadMappingRoundTrip(new BigDecimal("1.00"), new BigDecimal("1"), roundDecimal2, dec2Scale);
-        assertSliceReadMappingRoundTrip(new BigDecimal("1.0"), new BigDecimal("1.0"), roundDecimal2, dec2Scale);
+        assertSliceReadMappingRoundTrip(new BigDecimal("1.00"), new BigDecimal("1.0"), roundDecimal2, dec2Scale);
         assertSliceReadMappingRoundTrip(new BigDecimal("1.20"), new BigDecimal("1.199"), roundDecimal2, dec2Scale);
         assertSliceReadMappingRoundTrip(new BigDecimal("0.10"), new BigDecimal("0.099"), roundDecimal2, dec2Scale);
 
@@ -58,6 +59,8 @@ public class TestOracleReadMappings
         assertSliceReadMappingRoundTrip(new BigDecimal("100.00000001"), new BigDecimal("100.000000009"), roundDecimal8, dec8Scale);
         assertSliceReadMappingRoundTrip(new BigDecimal("500.00000000"), new BigDecimal("500"), roundDecimal8, dec8Scale);
 
+        assertSliceReadMappingRoundTrip(new BigDecimal("0.68" + repeat("0", 13)), new BigDecimal("0.680"), roundDecimal15, dec15Scale);
+        assertSliceReadMappingRoundTrip(new BigDecimal("98765.1" + repeat("0", 14)), new BigDecimal("98765.10"), roundDecimal15, dec15Scale);
     }
 
     private void assertSliceReadMappingRoundTrip(BigDecimal correctValue, BigDecimal testInput, ReadMapping readMapping, DecimalType decimalType) {
@@ -66,12 +69,20 @@ public class TestOracleReadMappings
             ResultSet rs = getMockResultSet(0, testInput);
             SliceReadFunction readFn = (SliceReadFunction) readMapping.getReadFunction();
             Slice testSlice = readFn.readSlice(rs, 0);
-            Slice correctSlice = encodeScaledValue(correctValue, scale);
+            Slice correctSlice = encodeUnscaledValue(correctValue.unscaledValue());
 
             String testVal = Decimals.toString(testSlice, scale);
             String correctVal = Decimals.toString(correctSlice, scale);
             if(!testSlice.equals(correctSlice)) {
                 fail(format("Slice values do not match => expected: %s, sliceOutput: %s", correctVal, testVal));
+            }
+            if(!testVal.equals(correctVal)) {
+                fail(format("Slice (text) values do not match => expected: %s, sliceOutput: %s", correctVal, testVal));
+            }
+            BigDecimal decVal = toBigDecimal(testSlice, scale);
+            BigDecimal decCorrect = toBigDecimal(correctSlice, scale);
+            if(!decVal.equals(decCorrect)) {
+                fail(format("Slice (decimal) values do not match => expected: %s, sliceOutput: %s", decCorrect, decVal));
             }
         } catch (SQLException ex) {
             throw new RuntimeException(ex);
