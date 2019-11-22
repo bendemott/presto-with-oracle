@@ -17,6 +17,11 @@ An oracle JDBC driver must be provided in the plugin directory.
 By default the class `oracle.jdbc.OracleDriver` is checked to ensure the Jar has been loaded correctly.
 You can override which class is used for the class check by specifying the java property: `com.facebook.presto.plugin.oracle.ImportTest`
 
+## Tests
+- Decent test coverage for complex logic
+- Plan to improve overall test coverage
+- End-to-End CI (Oracle Docker) tests are WIP
+
 ## Issues
 - user synonyms work, but synonyms through a grant do not
 
