@@ -15,6 +15,7 @@ package com.facebook.presto.plugin.oracle;
 
 import com.facebook.presto.plugin.jdbc.*;
 import com.facebook.presto.spi.*;
+import com.facebook.presto.spi.type.VarcharType;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import io.airlift.log.Logger;
@@ -30,6 +31,7 @@ import java.util.Optional;
 import static com.facebook.presto.plugin.jdbc.JdbcErrorCode.JDBC_ERROR;
 import static com.facebook.presto.plugin.jdbc.StandardReadMappings.*;
 import static com.facebook.presto.spi.type.VarcharType.createUnboundedVarcharType;
+import static com.facebook.presto.spi.type.VarcharType.createVarcharType;
 import static java.sql.ResultSetMetaData.columnNullable;
 
 /**
@@ -231,10 +233,16 @@ public class OracleClient
     {
         String error = "";
         OracleJdbcTypeHandle orcTypeHandle = new OracleJdbcTypeHandle(typeHandle);
+        int columnSize = orcTypeHandle.getColumnSize();
 
         // -- Handle JDBC to Presto Type Mappings -------------------------------------------------
         Optional<ReadMapping> readType = Optional.empty();
         switch (typeHandle.getJdbcType()) {
+            case Types.LONGVARCHAR:
+                if (columnSize > VarcharType.MAX_LENGTH || columnSize == 0) {
+                    return Optional.of(varcharReadMapping(createUnboundedVarcharType()));
+                }
+                return Optional.of(varcharReadMapping(createVarcharType(columnSize)));
             case Types.DATE:
                 // Oracle DATE values may store hours, minutes, and seconds, so they are mapped to TIMESTAMP in Presto.
                 // treat oracle DATE as TIMESTAMP (java.sql.Timestamp)
@@ -250,7 +258,6 @@ public class OracleClient
                 } catch (PrestoException ex) {
                     error  = ex.toString();
                 }
-                LOG.info("------------------------------------------------");
                 break;
             default:
                 readType = super.toPrestoType(session, typeHandle);
