@@ -49,9 +49,6 @@ public class OracleReadMappings {
         return ReadMapping.sliceReadMapping(decimalType, (resultSet, columnIndex) -> {
             int scale = decimalType.getScale();
             BigDecimal dec = resultSet.getBigDecimal(columnIndex);
-            // if value is null, return null
-            if(dec == null) { return null; }
-
             // round will add zeros, or truncate by rounding to ensure the digits to the right of the decimal
             // are filled to exactly SCALE digits.
             dec = dec.setScale(scale, round);
@@ -84,7 +81,6 @@ public class OracleReadMappings {
     public static ReadMapping decimalVarcharReadMapping(VarcharType varcharType) {
         return ReadMapping.sliceReadMapping(varcharType, (resultSet, columnIndex) -> {
             BigDecimal dec = resultSet.getBigDecimal(columnIndex);
-            if(dec == null) { return null; }
             return utf8Slice(dec.toString());
         });
     }
