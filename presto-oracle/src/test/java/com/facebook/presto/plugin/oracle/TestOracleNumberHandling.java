@@ -17,7 +17,7 @@ import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertThrows;
 public class TestOracleNumberHandling
 {
-    // TODO test type-limit-exceed IGNORE, CONVERT_TO_VARCHAR, FAIL
+    // TODO test type-limit-exceed IGNORE, VARCHAR, FAIL
     // TODO test that scale >= precision, set precision to MAX_PRECISION
     //
     @Test void testReadMapCompare()
@@ -87,11 +87,10 @@ public class TestOracleNumberHandling
         assertEquals(ratioScale, config.getNumberDecimalDefaultScaleRatio());
 
         // test (ratio) defined precision, defined scale (within limits)
-        /*
+
         numberHandling = buildNumberHandling(30, 2, config);
         readExpected = decimalReadMapping(createDecimalType(30, 2));
         TestOracleReadMappings.assertReadMappingEquals(readExpected, numberHandling.getReadMapping());
-         */
 
         // test (ratio) defined precision, undefined scale
         precision = 30;
@@ -115,11 +114,10 @@ public class TestOracleNumberHandling
         TestOracleReadMappings.assertReadMappingEquals(readExpected, numberHandling.getReadMapping());
 
         // test (ratio) scale >= precision, and scale <= MAX_PRECISION
-        /*
         expectedScale = 24;
         numberHandling = buildNumberHandling(20, expectedScale, config);
         readExpected = decimalReadMapping(createDecimalType(Decimals.MAX_PRECISION, expectedScale));
-        TestOracleReadMappings.assertReadMappingEquals(readExpected, numberHandling.getReadMapping());*/
+        TestOracleReadMappings.assertReadMappingEquals(readExpected, numberHandling.getReadMapping());
 
         // test (ratio) scale >= precision, and scale > MAX_PRECISION
         // in this case because the scale exceeds precision, precision will be set to MAX_PRECISION
@@ -130,8 +128,6 @@ public class TestOracleNumberHandling
                 createDecimalType(Decimals.MAX_PRECISION,  expectedScale),
                 round);
         TestOracleReadMappings.assertReadMappingEquals(readExpected, numberHandling.getReadMapping());
-
-        // todo test negative precision
     }
 
     @Test
@@ -148,10 +144,9 @@ public class TestOracleNumberHandling
         assertEquals(fixedScale, config.getNumberDecimalDefaultScaleFixed());
 
         // test defined precision, defined scale (within limits)
-        /*
         numberHandling = buildNumberHandling(30, 2, config);
         readExpected = decimalReadMapping(createDecimalType(30, 2));
-        TestOracleReadMappings.assertReadMappingEquals(readExpected, numberHandling.getReadMapping());*/
+        TestOracleReadMappings.assertReadMappingEquals(readExpected, numberHandling.getReadMapping());
 
         // test defined precision, undefined scale
         numberHandling = buildNumberHandling(Decimals.MAX_PRECISION, OracleConfig.UNDEFINED_SCALE, config);
@@ -172,11 +167,11 @@ public class TestOracleNumberHandling
         TestOracleReadMappings.assertReadMappingEquals(readExpected, numberHandling.getReadMapping());
 
         // test scale >= precision, and scale <= MAX_PRECISION
-        /*
+
         fixedScale = 24;
         numberHandling = buildNumberHandling(20, fixedScale, config);
         readExpected = decimalReadMapping(createDecimalType(Decimals.MAX_PRECISION, fixedScale));
-        TestOracleReadMappings.assertReadMappingEquals(readExpected, numberHandling.getReadMapping());*/
+        TestOracleReadMappings.assertReadMappingEquals(readExpected, numberHandling.getReadMapping());
 
         // test scale >= precision, and scale > MAX_PRECISION
         fixedScale = Decimals.MAX_PRECISION + 1;
