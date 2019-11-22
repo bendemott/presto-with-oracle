@@ -91,6 +91,6 @@ public class TestOracleConfig
                 .setNumberDoubleDefaultScaleFixed(6)
                 .setNumberDoubleRoundMode("UP");
 
-        //ConfigAssertions.assertFullMapping(properties, expected); TODO fixme TestOracleConfig.testExplicitPropertyMappings:94 AutoReconnect
+        //ConfigAssertions.assertFullMapping(properties, expected); //TODO need to finish implementing numberAsDecimalTypes, and others for this to pass
     }
 }

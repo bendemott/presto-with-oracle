@@ -72,7 +72,7 @@ public class OracleNumberHandling {
             switch(config.getNumberExceedsLimitsMode()) {
                 case ROUND:
                     break;
-                case CONVERT_TO_VARCHAR:
+                case VARCHAR:
                     mapToType = JDBCType.VARCHAR;
                     break;
                 case IGNORE:

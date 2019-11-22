@@ -15,7 +15,6 @@ package com.facebook.presto.plugin.oracle;
 
 import com.facebook.presto.plugin.jdbc.*;
 import com.facebook.presto.spi.*;
-import com.facebook.presto.spi.type.Type;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import io.airlift.log.Logger;
@@ -260,7 +259,7 @@ public class OracleClient
         if(!readType.isPresent()) {
             String msg = String.format("unsupported type %s - %s", orcTypeHandle.getDescription(), error);
             switch(oracleConfig.getUnsupportedTypeStrategy()) {
-                case CONVERT_TO_VARCHAR:
+                case VARCHAR:
                     readType = Optional.of(StandardReadMappings.varcharReadMapping(createUnboundedVarcharType()));
                     break;
                 case IGNORE:
